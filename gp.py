@@ -10,6 +10,7 @@ from jax.numpy.linalg import norm
 from einops import rearrange
 import scipy
 import numpy
+import autobounds
 
 EPS = float(jnp.sqrt(jnp.finfo(float).eps))
 MAX_NUGGET = 1e-1
@@ -27,22 +28,21 @@ class Parameters(NamedTuple):
     nu: Float[Array, "o"]
 
 
-def squared_distance(
-    x1: Float[Array, "n d"],
-    x2: Float[Array, "m d"],
-) -> Float[Array, "n m"]:
-    def dist(a, b):
-        return jnp.sum((a - b) ** 2)
-
-    dist = jax.vmap(jax.vmap(dist, (None, 0)), (0, None))
-    return dist(x1, x2)
-
-
 def kernel(
     x1: Float[Array, "n d"],
     x2: Float[Array, "m d"],
     theta: Float[Array, "d"],
 ) -> Float[Array, "n m"]:
+    def squared_distance(
+        x1: Float[Array, "n d"],
+        x2: Float[Array, "m d"],
+    ) -> Float[Array, "n m"]:
+        def dist(a, b):
+            return jnp.sum((a - b) ** 2)
+
+        dist = jax.vmap(jax.vmap(dist, (None, 0)), (0, None))
+        return dist(x1, x2)
+
     # matern 5/2 kernel
     theta = jnp.sqrt(theta)
     d2 = squared_distance(x1 / theta, x2 / theta)
@@ -99,19 +99,6 @@ def mle_loss(
     return -loglik
 
 
-def hetgpy_auto_bounds(x, min_cor=0.01, max_cor=0.5):
-    # rescale X to [0,1]^d
-    x_min, x_max = x.min(axis=0), x.max(axis=0)
-    x = (x - x_min) @ jnp.diag(1 / (x_max - x_min))
-    # compute pairwise distances only for proper pair
-    dists = squared_distance(x, x)
-    dists = dists[jnp.tril(dists, k=-1) > 0]
-    # magic initialization using inverse of kernel
-    lower = -jnp.quantile(dists, q=0.05) / jnp.log(min_cor) * (x_max - x_min) ** 2
-    upper = -jnp.quantile(dists, q=0.95) / jnp.log(max_cor) * (x_max - x_min) ** 2
-    return lower, upper
-
-
 class GaussianProcess(NamedTuple):
     x: Float[Array, "n d"]
     y: Float[Array, "n"]
@@ -128,7 +115,7 @@ class GaussianProcess(NamedTuple):
         verbose: bool = False,
     ) -> "GaussianProcess":
         # initialization
-        lower, upper = hetgpy_auto_bounds(x)
+        lower, upper = autobounds.hetgpy_auto_bounds(x)
         init_theta = 0.9 * upper + 0.1 * lower
         init_g = jnp.minimum(0.1, MAX_NUGGET)
         if warmstart is not None:
@@ -207,41 +194,47 @@ class GaussianProcess(NamedTuple):
         y_star = self.y.min()
         z = (y_star - mu) / sigma
 
-        c1 = jnp.log(2.0 * jnp.pi) / 2.0
-        c2 = jnp.log(0.5 * jnp.pi) / 2.0
-        log_ei = jnp.log(sigma) + jnp.where(
-            z > -1,
-            jnp.log(z * jsp.stats.norm.cdf(z) + jsp.stats.norm.pdf(z)),
-            -(z**2) / 2
-            - c1
-            + jnp.where(
-                z > -1 / EPS,
-                +jax.nn.log1mexp(
-                    -(
-                        jnp.log(-z)
-                        + z**2 / 2
-                        + jnp.log(jax.lax.erfc(-z / jnp.sqrt(2)))  # type: ignore
-                        + c2
-                    )
-                ),
-                -2 * jnp.log(-z),
-            ),
-        )
-        return log_ei
+        def eval_single(z):
+            branch1 = lambda: jnp.log(z * jsp.stats.norm.cdf(z) + jsp.stats.norm.pdf(z))
+            branch2a = lambda: -2 * jnp.log(-z)
+            branch2b = lambda: jax.nn.log1mexp(
+                -jnp.log(-z)
+                - jsp.stats.norm.logsf(-z)
+                - z**2 / 2
+                - jnp.log(2 * jnp.pi) / 2.0
+            )
+            branch2 = lambda: (
+                -(z**2) / 2
+                - jnp.log(2 * jnp.pi) / 2
+                + jax.lax.cond(z < -1 / EPS, branch2a, branch2b)
+            )
+            return jax.lax.cond(z > -1, branch1, branch2)
+
+        return jnp.log(sigma) + jax.vmap(eval_single)(z)
 
     def acquisition(
         self, multistart: int = 16, max_iterations=10, verbose: bool = False
     ) -> tuple[Float[Array, "n d"], Float[Array, "n"]]:
         @jax.jit
+        @jax.value_and_grad
         def loss(x_flat):
             x = x_flat.reshape(-1, d)
             return -self.expected_improvement(x).sum()
 
+        def verbose_loss(x_flat):
+            v, g = loss(x_flat)
+            if jnp.isnan(v):
+                print(f"NaN loss at {x_flat}")
+            elif jnp.any(jnp.isnan(g)):
+                print(f"NaN in gradient at {x_flat}")
+            return v, g
+
         n, d = self.x.shape
         x0 = scipy.stats.qmc.LatinHypercube(d).random(n=multistart).flatten()
         result = scipy.optimize.minimize(
-            fun=loss,
+            fun=verbose_loss,
             x0=x0,
+            jac=True,
             method="L-BFGS-B",
             bounds=[(0, 1) for _ in range(len(x0))],
             options=dict(maxiter=max_iterations, ftol=EPS, gtol=0),
