@@ -1,6 +1,9 @@
 # Ignore npz files
 *.npz
 
+# Ignore logs
+logs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

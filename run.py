@@ -9,7 +9,7 @@ import gp
 import argparse
 import os
 
-N_RUNS = 8
+N_RUNS = 32
 EPS = float(jnp.sqrt(jnp.finfo(float).eps))
 jax.config.update("jax_enable_x64", True)
 
@@ -164,7 +164,7 @@ if __name__ == "__main__":
     # ---> Latin Hypercube Sampling
     parser_lhs = subparser.add_parser("lhs")
     parser_lhs.add_argument("--points", type=int, required=True)
-    # ---> L-BFGS-B
+    # ---> Optimize with L-BFGS-B
     parser_bfgs = subparser.add_parser("bfgs")
     parser_bfgs.add_argument("--multi_starts", type=int, required=True)
     parser_bfgs.add_argument("--max_iterations", type=int, default=100)
@@ -172,7 +172,7 @@ if __name__ == "__main__":
 
     ######################################################################
     # Run the experiments and save results
-    save_dir = f"results/{args.kernel}_{args.acquisition_strategy}"
+    save_dir = f"results/{args.acquisition_strategy}/{args.kernel}"
     os.makedirs(save_dir, exist_ok=True)
     for seed in range(N_RUNS):
         ymin = run(seed=seed, **vars(args))
