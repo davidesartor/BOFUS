@@ -12,7 +12,7 @@ import autobounds
 EPS = float(jnp.sqrt(jnp.finfo(float).eps))
 MAX_NUGGET = 1e-3
 
-Kernel = Literal["squared_exponential", "matern_5_2", "matern_3_2", "matern_1_2"]
+Kernel = Literal["squaredexponential", "matern52", "matern32", "matern12"]
 
 
 class Gaussian(NamedTuple):
@@ -33,13 +33,13 @@ def cov_fn(
     ):
         d2 = jnp.sum(jnp.square(a - b) / theta)
         d = jnp.sqrt(jnp.where(d2 > 0, d2, EPS))
-        if kernel == "squared_exponential":
+        if kernel == "squaredexponential":
             k = jnp.exp(-0.5 * d2)
-        elif kernel == "matern_1_2":
+        elif kernel == "matern12":
             k = jnp.exp(-d)
-        elif kernel == "matern_3_2":
+        elif kernel == "matern32":
             k = (1 + jnp.sqrt(3) * d) * jnp.exp(-jnp.sqrt(3) * d)
-        elif kernel == "matern_5_2":
+        elif kernel == "matern52":
             k = (1 + jnp.sqrt(5) * d + 5 / 3 * d2) * jnp.exp(-jnp.sqrt(5) * d)
         k = jax.lax.cond(d2 == 0.0, lambda: 1.0, lambda: k)
         return k
@@ -97,7 +97,7 @@ class GaussianProcess(NamedTuple):
         y: Float[Array, "n"],
         *,
         warmstart: Optional[Self] = None,
-        kernel: Kernel = "squared_exponential",
+        kernel: Kernel = "squaredexponential",
         max_iterations: int = 100,
         verbose: bool = False,
     ):
