@@ -7,10 +7,10 @@ import jax.scipy as jsp
 import equinox as eqx
 import scipy as sp
 import numpy as np
-import autobounds
 
 EPS = float(jnp.sqrt(jnp.finfo(float).eps))
 MAX_NUGGET = 1e-3
+
 
 Kernel = Literal["squaredexponential", "matern52", "matern32", "matern12"]
 
@@ -27,24 +27,33 @@ def cov_fn(
     x1: Float[Array, "n d"],
     x2: Float[Array, "m d"],
 ) -> Float[Array, "n m"]:
-    def eval_single(
-        a: Float[Array, "d"],
-        b: Float[Array, "d"],
-    ):
-        d2 = jnp.sum(jnp.square(a - b) / theta)
-        d = jnp.sqrt(jnp.where(d2 > 0, d2, EPS))
-        if kernel == "squaredexponential":
-            k = jnp.exp(-0.5 * d2)
-        elif kernel == "matern12":
-            k = jnp.exp(-d)
-        elif kernel == "matern32":
-            k = (1 + jnp.sqrt(3) * d) * jnp.exp(-jnp.sqrt(3) * d)
-        elif kernel == "matern52":
-            k = (1 + jnp.sqrt(5) * d + 5 / 3 * d2) * jnp.exp(-jnp.sqrt(5) * d)
-        k = jax.lax.cond(d2 == 0.0, lambda: 1.0, lambda: k)
-        return k
+    # compute pairwise distances
+    def dist(a, b):
+        return jnp.sum(jnp.square(a - b) / theta)
 
-    return jax.vmap(jax.vmap(eval_single, (None, 0)), (0, None))(x1, x2)
+    dist = jax.vmap(jax.vmap(dist, (None, 0)), (0, None))
+    d2 = dist(x1, x2)
+
+    # replace zero distances with mock values
+    # avoids leaking NaNs in the gradient computation
+    distance_is_not_zero = d2 > 0.0
+    d2 = jnp.where(distance_is_not_zero, d2, 1.0)
+    d = jnp.sqrt(d2)
+
+    # compute kernel values
+    if kernel == "squaredexponential":
+        k = jnp.exp(-0.5 * d2)
+    elif kernel == "matern12":
+        k = jnp.exp(-d)
+    elif kernel == "matern32":
+        k = (1 + jnp.sqrt(3) * d) * jnp.exp(-jnp.sqrt(3) * d)
+    elif kernel == "matern52":
+        k = (1 + jnp.sqrt(5) * d + 5 / 3 * d2) * jnp.exp(-jnp.sqrt(5) * d)
+
+    # fill in mock values for zero distances with 1.0
+    # (assumes the kernel value at zero distance)
+    k = jnp.where(distance_is_not_zero, k, 1.0)
+    return k
 
 
 @eqx.filter_jit
@@ -80,6 +89,26 @@ def likelihood(
     return loglik, b, nu
 
 
+def hetgpy_auto_bounds(
+    x: Float[Array, "n d"], min_cor=0.01, max_cor=0.5
+) -> tuple[Float[Array, "d"], Float[Array, "d"]]:
+    # TODO: this is a post of the bounds for the rbf kernel
+    # should adjust it for matern and make it a method of the gp class
+
+    # rescale X to [0,1]^d
+    x_min, x_max = x.min(axis=0), x.max(axis=0)
+    x = (x - x_min) @ jnp.diag(1 / (x_max - x_min))
+
+    # compute pairwise distances only for proper pair
+    dists = sp.spatial.distance.cdist(x, x) ** 2
+    dists = dists[jnp.tril(dists, k=-1) > 0]
+
+    # magic initialization using inverse of kernel
+    lower = -jnp.quantile(dists, q=0.05) / jnp.log(min_cor) * (x_max - x_min) ** 2
+    upper = -jnp.quantile(dists, q=0.95) / jnp.log(max_cor) * (x_max - x_min) ** 2
+    return lower, upper
+
+
 class GaussianProcess(NamedTuple):
     kernel: Kernel
     x: Float[Array, "n d"]
@@ -104,7 +133,7 @@ class GaussianProcess(NamedTuple):
         n, d = x.shape
 
         # initialization
-        lower, upper = autobounds.hetgpy_auto_bounds(x)
+        lower, upper = hetgpy_auto_bounds(x)
         init_theta = 0.9 * upper + 0.1 * lower
         init_g = jnp.minimum(0.1, MAX_NUGGET)
         if warmstart is not None:
@@ -149,7 +178,7 @@ class GaussianProcess(NamedTuple):
         # extract the optimal parameters and infer the rest
         theta, g = result.x[..., :-1], result.x[..., -1]
         llk, b, nu = likelihood(kernel, theta, g, x, y)
-        Koo = nu * (cov_fn(kernel, theta, x, x) + jnp.eye(x.shape[0]) * (EPS + g))
+        Koo = nu * (cov_fn(kernel, theta, x, x) + jnp.eye(n) * (EPS + g))
         if verbose:
             print(f"Optimal theta: {theta}")
             print(f"Optimal g: {g}")
@@ -203,6 +232,7 @@ class GaussianProcess(NamedTuple):
     def expected_improvement(self, x: Float[Array, "n d"]) -> Float[Array, "n"]:
         # numerically stable version following https://arxiv.org/pdf/2310.20708:
         # NOTE: it might fail due to numerical precision if the argument of log1mexp is negative
+        # TODO: rewrite it using jnp.where and mock values in place of lax.cond
         mu, cov = self.predict(x)
         sigma = jnp.diag(cov) ** 0.5
         y_star = self.y.min()

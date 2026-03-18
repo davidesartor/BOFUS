@@ -5,102 +5,22 @@ from jaxtyping import Array, Float
 from tqdm import tqdm
 import scipy as sp
 import numpy as np
-import gp
 import argparse
 import os
+import time
+import random
 
-N_RUNS = 32
-EPS = float(jnp.sqrt(jnp.finfo(float).eps))
+from src import gp, test_functions, acquisition
+
 jax.config.update("jax_enable_x64", True)
-
-######################################################################
-# target functions
-######################################################################
-
-
-def goldstein_price(x: Float[Array, "n 2"]) -> Float[Array, "n"]:
-    x1, x2 = 4 * x[:, 0] - 2, 4 * x[:, 1] - 2
-    fact1a = (x1 + x2 + 1) ** 2
-    fact1b = 19 - 14 * x1 + 3 * x1**2 - 14 * x2 + 6 * x1 * x2 + 3 * x2**2
-    fact1 = 1 + fact1a * fact1b
-
-    fact2a = (2 * x1 - 3 * x2) ** 2
-    fact2b = 18 - 32 * x1 + 12 * x1**2 + 48 * x2 - 36 * x1 * x2 + 27 * x2**2
-    fact2 = 30 + fact2a * fact2b
-    y = fact1 * fact2
-    y = (jnp.log(y) - 8.6928) / 2.4269
-    return y
-
-
-######################################################################
-# acquisition strategies
-######################################################################
-
-
-def lhs_acquisition(
-    model: gp.GaussianProcess,
-    points: int,
-) -> Float[Array, "#n d"]:
-    n, d = model.x.shape
-    lhs_sampler = sp.stats.qmc.LatinHypercube(d=d, seed=np.random.mtrand._rand)
-    x = lhs_sampler.random(n=points)
-    ei = model.expected_improvement(x)
-    best = jnp.argmax(ei)
-    return x[best : best + 1]
-
-
-def bfgs_acquisition(
-    model: gp.GaussianProcess,
-    multi_starts: int,
-    max_iterations: int,
-) -> Float[Array, "#n d"]:
-    @jax.jit
-    @jax.value_and_grad
-    def loss(x):
-        return -model.expected_improvement(x[None]).squeeze()
-
-    def safe_loss(x):
-        v, g = loss(x)
-        nan_in_v = jnp.isnan(v).any()
-        nan_in_g = jnp.isnan(g).any()
-        if nan_in_v or nan_in_g:
-            mu, cov = model.predict(x[None])
-            sigma = jnp.diag(cov) ** 0.5
-            y_star = model.y.min()
-            z = (y_star - mu) / sigma
-            print()
-            print(f"NaN encountered")
-            print(f"NaN in loss: {nan_in_v}, NaN in gradient: {nan_in_g}")
-            print(f"at z={z}, mu={mu}, sigma={sigma}")
-            print()
-        return v, g
-
-    n, d = model.x.shape
-    lhs_sampler = sp.stats.qmc.LatinHypercube(d=d, seed=np.random.mtrand._rand)
-    results = [
-        sp.optimize.minimize(
-            fun=safe_loss,
-            x0=x0,
-            jac=True,
-            method="L-BFGS-B",
-            bounds=[(0, 1) for _ in range(d)],
-            options=dict(maxiter=max_iterations, ftol=EPS, gtol=0),
-        )
-        for x0 in lhs_sampler.random(n=multi_starts)
-    ]
-    x = jnp.array([result.x for result in results])
-    best = jnp.argmin(jnp.array([result.fun for result in results]))
-    return x[best : best + 1]
-
-
-######################################################################
-# simulation loop
-######################################################################
+EPS = float(jnp.sqrt(jnp.finfo(float).eps))
+N_RUNS = 64
 
 
 def run(
     # simualtion parameters
     seed: int,
+    test_function: str,
     initial_acquisitions: int,
     total_acquisitions: int,
     # gaussian process parameters
@@ -112,18 +32,34 @@ def run(
     *args,
     **kwargs,
 ) -> Float[Array, "k"]:
+    # set random seeds
     np.random.seed(seed)
+    random.seed(seed)
+
+    # select test function
+    if test_function == "goldstein":
+        test_fn = test_functions.GoldsteinPrice()
+    elif test_function == "rover":
+        test_fn = test_functions.Rover()
+    elif test_function == "push":
+        test_fn = test_functions.Push()
+    elif test_function == "lunar":
+        test_fn = test_functions.LunarLander()
+    else:
+        raise ValueError(f"Unknown test function: {test_function}")
+    
+    # select acquisition strategy
     if acquisition_strategy == "lhs":
-        acquisition_fn = lhs_acquisition
+        acquisition_fn = acquisition.LHS()
     elif acquisition_strategy == "bfgs":
-        acquisition_fn = bfgs_acquisition
+        acquisition_fn = acquisition.BFGS()
     else:
         raise ValueError(f"Unknown acquisition strategy: {acquisition_strategy}")
-
+    
     # initial acquisitions
-    lhs_sampler = sp.stats.qmc.LatinHypercube(d=2, seed=np.random.mtrand._rand)
+    lhs_sampler = sp.stats.qmc.LatinHypercube(d=test_fn.d, seed=np.random.mtrand._rand)
     x0 = lhs_sampler.random(n=initial_acquisitions)
-    y0 = goldstein_price(x0)
+    y0 = jnp.array([test_fn(xi) for xi in x0])
     model = gp.GaussianProcess.fit(
         x0, y0, kernel=kernel, max_iterations=max_fit_iterations
     )
@@ -134,7 +70,7 @@ def run(
     ymin[initial_acquisitions] = model.y.min()
     for i in tqdm(range(initial_acquisitions, total_acquisitions)):
         x = acquisition_fn(model, *args, **kwargs)
-        y = goldstein_price(x)
+        y = jnp.array([test_fn(xi) for xi in x])
         model = model.update(
             x, y, warmstart=warm_start_update, max_iterations=max_fit_iterations
         )
@@ -147,6 +83,11 @@ if __name__ == "__main__":
 
     ######################################################################
     # Simulation parameters
+    parser.add_argument(
+        "--test_function",
+        choices=["goldstein", "rover", "push", "lunar"],
+        required=True
+    )
     parser.add_argument("--initial_acquisitions", type=int, default=4)
     parser.add_argument("--total_acquisitions", type=int, default=50)
     ######################################################################
@@ -172,9 +113,13 @@ if __name__ == "__main__":
 
     ######################################################################
     # Run the experiments and save results
-    save_dir = f"results/{args.acquisition_strategy}/{args.kernel}"
+    save_dir = f"results/{args.test_function}/{args.acquisition_strategy}/{args.kernel}"
     os.makedirs(save_dir, exist_ok=True)
     for seed in range(N_RUNS):
+        start_time = time.time()
         ymin = run(seed=seed, **vars(args))
+        end_time = time.time()
+        print(f"Run {seed} completed in {end_time - start_time:.2f} seconds.")
+
         filename = f"{save_dir}/seed={seed}.npz"
-        np.savez_compressed(filename, ymin=ymin)
+        np.savez_compressed(filename, ymin=ymin, time=end_time - start_time)
