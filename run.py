@@ -53,6 +53,8 @@ def run(
         acquisition_fn = acquisition.LHS()
     elif acquisition_strategy == "bfgs":
         acquisition_fn = acquisition.BFGS()
+    elif acquisition_strategy == "voronoi":
+        acquisition_fn = acquisition.Voronoi()
     else:
         raise ValueError(f"Unknown acquisition strategy: {acquisition_strategy}")
     
@@ -109,6 +111,11 @@ if __name__ == "__main__":
     parser_bfgs = subparser.add_parser("bfgs")
     parser_bfgs.add_argument("--multi_starts", type=int, required=True)
     parser_bfgs.add_argument("--max_iterations", type=int, default=100)
+    # ---> Voronoi-based acquisition
+    parser_voronoi = subparser.add_parser("voronoi")
+    parser_voronoi.add_argument("--multi_starts", type=int, required=True)
+    parser_voronoi.add_argument("--binary_search_steps", type=int, default=30)
+    parser_voronoi.add_argument("--sampling_strategy", choices=["uniform", "lhs"], default="uniform")
     args = parser.parse_args()
 
     ######################################################################

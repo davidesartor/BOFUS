@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=test
 #SBATCH --output=logs/lunar/%A_%a.out
-#SBATCH --array=0-7                   # 4 kernels × 2 strategies 
+#SBATCH --array=0-11                  # 4 kernels × 3 strategies 
 #SBATCH --ntasks=1                    # 1 process per job
 #SBATCH --cpus-per-task=2             # 2 cores to avoid locks
 #SBATCH --mem=8G                      # 8 GB RAM for each job
-#SBATCH --time=04:00:00           
+#SBATCH --time=24:00:00           
 #SBATCH --partition=cpu
 
 
 strategies=(
   bfgs
   lhs
+  voronoi
 )
 kernels=(
   matern52
@@ -41,5 +42,8 @@ case "$strategy" in
     ;;
   lhs)
     uv run run.py --test_function lunar --initial_acquisitions 12 --total_acquisitions 600 --kernel "$kernel" lhs --points 12
+    ;;
+  voronoi)
+    uv run run.py --test_function lunar --initial_acquisitions 12 --total_acquisitions 600 --kernel "$kernel" voronoi --multi_starts 100 --binary_search_steps 30 --sampling_strategy "uniform"
     ;;
 esac

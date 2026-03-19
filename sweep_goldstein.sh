@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=test
 #SBATCH --output=logs/goldstein/%A_%a.out
-#SBATCH --array=0-7                   # 4 kernels × 2 strategies 
+#SBATCH --array=0-11                   # 4 kernels × 3 strategies 
 #SBATCH --ntasks=1                    # 1 process per job
 #SBATCH --cpus-per-task=2             # 2 cores to avoid locks
 #SBATCH --mem=4G                      # 4 GB RAM for each job
@@ -13,6 +13,7 @@
 strategies=(
   bfgs
   lhs
+  voronoi
 )
 kernels=(
   matern52
@@ -42,5 +43,8 @@ case "$strategy" in
     ;;
   lhs)
     uv run run.py --test_function goldstein --initial_acquisitions 4 --total_acquisitions 50 --kernel "$kernel" lhs --points 30
+    ;;
+  voronoi)
+    uv run run.py --test_function goldstein --initial_acquisitions 4 --total_acquisitions 50 --kernel "$kernel" voronoi --multi_starts 100 --binary_search_steps 30 --sampling_strategy "uniform"
     ;;
 esac
