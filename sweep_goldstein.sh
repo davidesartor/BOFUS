@@ -1,50 +1,38 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=test
+#SBATCH --job-name=goldstein
 #SBATCH --output=logs/goldstein/%A_%a.out
-#SBATCH --array=0-11                   # 4 kernels × 3 strategies 
-#SBATCH --ntasks=1                    # 1 process per job
-#SBATCH --cpus-per-task=2             # 2 cores to avoid locks
-#SBATCH --mem=4G                      # 4 GB RAM for each job
-#SBATCH --time=01:00:00           
+#SBATCH --array=0-63
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=4G
+#SBATCH --time=00:30:00
 #SBATCH --partition=cpu
-
-
-
-strategies=(
-  bfgs
-  lhs
-  voronoi
-)
-kernels=(
-  matern52
-  squaredexponential
-  matern32
-  matern12
-)
-
-num_kernels=${#kernels[@]}        
-num_strategies=${#strategies[@]}
-total_combinations=$(( num_kernels * num_strategies ))
-
-strategy_idx=$(( SLURM_ARRAY_TASK_ID % num_strategies ))
-kernel_idx=$(( SLURM_ARRAY_TASK_ID / num_strategies ))
-
-strategy="${strategies[$strategy_idx]}"
-kernel="${kernels[$kernel_idx]}"
 
 mkdir -p logs/goldstein
 
+echo "Running goldstein | seed=$SLURM_ARRAY_TASK_ID"
 
-echo "Running test_function=goldstein | strategy=$strategy | kernel=$kernel"
+# LHS
+uv run run.py \
+  --config configs/goldstein.yaml \
+  --seed=$SLURM_ARRAY_TASK_ID \
+  --acquisition_strategy.class_path=LHS \
+  --acquisition_strategy.init_args.multi_starts=100 &
 
-case "$strategy" in
-  bfgs)
-    uv run run.py --test_function goldstein --initial_acquisitions 4 --total_acquisitions 50 --kernel "$kernel" bfgs --multi_starts 16 --max_iterations 100
-    ;;
-  lhs)
-    uv run run.py --test_function goldstein --initial_acquisitions 4 --total_acquisitions 50 --kernel "$kernel" lhs --points 30
-    ;;
-  voronoi)
-    uv run run.py --test_function goldstein --initial_acquisitions 4 --total_acquisitions 50 --kernel "$kernel" voronoi --multi_starts 100 --binary_search_steps 30 --sampling_strategy "uniform"
-    ;;
-esac
+# Voronoi
+uv run run.py \
+  --config configs/goldstein.yaml \
+  --seed=$SLURM_ARRAY_TASK_ID \
+  --acquisition_strategy.class_path=Voronoi \
+  --acquisition_strategy.init_args.multi_starts=100 &
+
+# BFGS
+uv run run.py \
+  --config configs/goldstein.yaml \
+  --seed=$SLURM_ARRAY_TASK_ID \
+  --acquisition_strategy.class_path=BFGS \
+  --acquisition_strategy.init_args.multi_starts=10 &
+
+wait
+
+

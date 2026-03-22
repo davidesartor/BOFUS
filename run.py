@@ -1,132 +1,114 @@
+from jaxtyping import Array, Float
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-from jaxtyping import Array, Float
 from tqdm import tqdm
 import scipy as sp
 import numpy as np
-import argparse
 import os
 import time
 import random
 
-from src import gp, test_functions, acquisition
+from src.gp import GaussianProcess
+from src.kernels import Metric, Euclidean, Minkowski
+from src.kernels import Profile, Matern, SquaredExponential
+
+
+from src.acquisition import AcquisitionStrategy, LHS, BFGS, Voronoi
+from src.test_functions import TestFunction, GoldsteinPrice, Rover, Push, LunarLander
+
+from jsonargparse import ArgumentParser, ActionConfigFile
 
 jax.config.update("jax_enable_x64", True)
 EPS = float(jnp.sqrt(jnp.finfo(float).eps))
-N_RUNS = 64
 
 
 def run(
-    # simualtion parameters
     seed: int,
-    test_function: str,
     initial_acquisitions: int,
     total_acquisitions: int,
-    # gaussian process parameters
-    kernel: gp.Kernel,
-    max_fit_iterations: int,
-    warm_start_update: bool,
-    # acquisition strategy parameters
-    acquisition_strategy: str,
-    *args,
-    **kwargs,
-) -> Float[Array, "k"]:
-    # set random seeds
+    acquisition_strategy: AcquisitionStrategy,
+    test_function: TestFunction,
+    model: GaussianProcess,
+) -> tuple[Float[Array, "k"], float, float]:
+    # set random seeds initialize timer
     np.random.seed(seed)
     random.seed(seed)
+    acquisition_time = 0.0
+    model_time = 0.0
 
-    # select test function
-    if test_function == "goldstein":
-        test_fn = test_functions.GoldsteinPrice()
-    elif test_function == "rover":
-        test_fn = test_functions.Rover()
-    elif test_function == "push":
-        test_fn = test_functions.Push()
-    elif test_function == "lunar":
-        test_fn = test_functions.LunarLander()
-    else:
-        raise ValueError(f"Unknown test function: {test_function}")
-    
-    # select acquisition strategy
-    if acquisition_strategy == "lhs":
-        acquisition_fn = acquisition.LHS()
-    elif acquisition_strategy == "bfgs":
-        acquisition_fn = acquisition.BFGS()
-    elif acquisition_strategy == "voronoi":
-        acquisition_fn = acquisition.Voronoi()
-    else:
-        raise ValueError(f"Unknown acquisition strategy: {acquisition_strategy}")
-    
     # initial acquisitions
-    lhs_sampler = sp.stats.qmc.LatinHypercube(d=test_fn.d, seed=np.random.mtrand._rand)
-    x0 = lhs_sampler.random(n=initial_acquisitions)
-    y0 = jnp.array([test_fn(xi) for xi in x0])
-    model = gp.GaussianProcess.fit(
-        x0, y0, kernel=kernel, max_iterations=max_fit_iterations
-    )
+    x0 = sp.stats.qmc.LatinHypercube(
+        d=test_function.d, seed=np.random.mtrand._rand
+    ).random(n=initial_acquisitions)
+    y0 = jnp.array([test_function(xi) for xi in x0])
+    model = model.fit(x0, y0)
 
     # experiment loop
     ymin = np.empty(total_acquisitions + 1)
     ymin[:initial_acquisitions] = np.nan
-    ymin[initial_acquisitions] = model.y.min()
+    ymin[initial_acquisitions] = model.observed_ys.min()
     for i in tqdm(range(initial_acquisitions, total_acquisitions)):
-        x = acquisition_fn(model, *args, **kwargs)
-        y = jnp.array([test_fn(xi) for xi in x])
-        model = model.update(
-            x, y, warmstart=warm_start_update, max_iterations=max_fit_iterations
+        # acquisition step
+        start_time = time.time()
+        x = acquisition_strategy(
+            acqusition_fn=model.expected_improvement,
+            observed_xs=model.observed_xs,
         )
-        ymin[i + 1] = model.y.min()
-    return jnp.array(ymin)
+        acquisition_time += time.time() - start_time
+
+        # get the test function values
+        y = jnp.array([test_function(xi) for xi in x])
+
+        start_time = time.time()
+        model = model.fit(
+            x=jnp.concatenate([model.observed_xs, x], axis=0),
+            y=jnp.concatenate([model.observed_ys, y], axis=0),
+        )
+        ymin[i + 1] = model.observed_ys.min()
+        model_time += time.time() - start_time
+    return jnp.array(ymin), acquisition_time, model_time
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
+    parser.add_argument("--config", action=ActionConfigFile)
 
-    ######################################################################
-    # Simulation parameters
-    parser.add_argument(
-        "--test_function",
-        choices=["goldstein", "rover", "push", "lunar"],
-        required=True
-    )
+    parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--initial_acquisitions", type=int, default=4)
     parser.add_argument("--total_acquisitions", type=int, default=50)
-    ######################################################################
-    # Gaussian process parameters
-    parser.add_argument("--max_fit_iterations", type=int, default=100)
-    parser.add_argument("--warm_start_update", type=bool, default=True)
+
     parser.add_argument(
-        "--kernel",
-        choices=["squaredexponential", "matern52", "matern32", "matern12"],
-        required=True,
+        "--test_function", type=GoldsteinPrice | Rover | Push | LunarLander
     )
-    ######################################################################
-    # Acquisition strategy parameters
-    subparser = parser.add_subparsers(dest="acquisition_strategy", required=True)
-    # ---> Latin Hypercube Sampling
-    parser_lhs = subparser.add_parser("lhs")
-    parser_lhs.add_argument("--points", type=int, required=True)
-    # ---> Optimize with L-BFGS-B
-    parser_bfgs = subparser.add_parser("bfgs")
-    parser_bfgs.add_argument("--multi_starts", type=int, required=True)
-    parser_bfgs.add_argument("--max_iterations", type=int, default=100)
-    # ---> Voronoi-based acquisition
-    parser_voronoi = subparser.add_parser("voronoi")
-    parser_voronoi.add_argument("--multi_starts", type=int, required=True)
-    parser_voronoi.add_argument("--binary_search_steps", type=int, default=30)
-    parser_voronoi.add_argument("--sampling_strategy", choices=["uniform", "lhs"], default="uniform")
+    parser.add_argument("--model", type=GaussianProcess)
+    parser.add_argument("--acquisition_strategy", type=LHS | BFGS | Voronoi)
+
     args = parser.parse_args()
+    cfg = parser.instantiate_classes(args)
 
-    ######################################################################
-    # Run the experiments and save results
-    save_dir = f"results/{args.test_function}/{args.acquisition_strategy}/{args.kernel}"
+    # create save directory
+    save_dir = f"results/{type(cfg.test_function).__name__}/{type(cfg.acquisition_strategy).__name__}+{type(cfg.model.kernel_metric).__name__}+{type(cfg.model.kernel_profile).__name__}"
     os.makedirs(save_dir, exist_ok=True)
-    for seed in range(N_RUNS):
-        start_time = time.time()
-        ymin = run(seed=seed, **vars(args))
-        end_time = time.time()
-        print(f"Run {seed} completed in {end_time - start_time:.2f} seconds.")
 
-        filename = f"{save_dir}/seed={seed}.npz"
-        np.savez_compressed(filename, ymin=ymin, time=end_time - start_time)
+    # run experiment
+    start_time = time.time()
+    ymin, acquisition_time, model_time = run(
+        seed=cfg.seed,
+        initial_acquisitions=cfg.initial_acquisitions,
+        total_acquisitions=cfg.total_acquisitions,
+        acquisition_strategy=cfg.acquisition_strategy,
+        test_function=cfg.test_function,
+        model=cfg.model,
+    )
+    end_time = time.time()
+    print(f"Run {cfg.seed} completed in {end_time - start_time:.2f} seconds.")
+
+    # save results
+    np.savez_compressed(
+        f"{save_dir}/seed={cfg.seed}.npz",
+        ymin=ymin,
+        run_time=end_time - start_time,
+        acquisition_time=acquisition_time,
+        model_time=model_time,
+    )

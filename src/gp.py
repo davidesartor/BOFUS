@@ -1,18 +1,20 @@
-from typing import NamedTuple, Literal, Optional, Self
-from jaxtyping import Array, Float
+from typing import NamedTuple, Literal, Optional, Protocol, Self
+from jaxtyping import Array, Float, Scalar, Key, PyTree
+from functools import partial
 
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
+import jax.random as jr
 import equinox as eqx
+import optax
 import scipy as sp
 import numpy as np
+from tqdm import tqdm
+from . import kernels
 
+jax.config.update("jax_enable_x64", True)
 EPS = float(jnp.sqrt(jnp.finfo(float).eps))
-MAX_NUGGET = 1e-3
-
-
-Kernel = Literal["squaredexponential", "matern52", "matern32", "matern12"]
 
 
 class Gaussian(NamedTuple):
@@ -20,239 +22,155 @@ class Gaussian(NamedTuple):
     cov: Float[Array, "n n"]
 
 
-@eqx.filter_jit
-def cov_fn(
-    kernel: Kernel,
-    theta: Float[Array, "d"],
-    x1: Float[Array, "n d"],
-    x2: Float[Array, "m d"],
-) -> Float[Array, "n m"]:
-    # compute pairwise distances
-    def dist(a, b):
-        return jnp.sum(jnp.square(a - b) / theta)
+class GaussianProcess(kernels.Module):
+    kernel_metric: kernels.Metric
+    kernel_profile: kernels.Profile
+    nugget_range: tuple[float, float] = (EPS, 1e-3)
+    max_fit_iterations: int = 100
 
-    dist = jax.vmap(jax.vmap(dist, (None, 0)), (0, None))
-    d2 = dist(x1, x2)
+    # gp parameters
+    logit_nugget: Scalar = eqx.field(default=None)
+    cov_scale: Scalar = eqx.field(default=None)
+    trend: Scalar = eqx.field(default=None)
 
-    # replace zero distances with mock values
-    # avoids leaking NaNs in the gradient computation
-    distance_is_not_zero = d2 > 0.0
-    d2 = jnp.where(distance_is_not_zero, d2, 1.0)
-    d = jnp.sqrt(d2)
+    # observed data
+    observed_xs: Float[Array, "n d"] = eqx.field(default=None)
+    observed_ys: Float[Array, "n"] = eqx.field(default=None)
 
-    # compute kernel values
-    if kernel == "squaredexponential":
-        k = jnp.exp(-0.5 * d2)
-    elif kernel == "matern12":
-        k = jnp.exp(-d)
-    elif kernel == "matern32":
-        k = (1 + jnp.sqrt(3) * d) * jnp.exp(-jnp.sqrt(3) * d)
-    elif kernel == "matern52":
-        k = (1 + jnp.sqrt(5) * d + 5 / 3 * d2) * jnp.exp(-jnp.sqrt(5) * d)
+    @property
+    def nugget(self):
+        lb, ub = self.nugget_range
+        return lb + (ub - lb) * jax.nn.sigmoid(self.logit_nugget)
 
-    # fill in mock values for zero distances with 1.0
-    # (assumes the kernel value at zero distance)
-    k = jnp.where(distance_is_not_zero, k, 1.0)
-    return k
-
-
-@eqx.filter_jit
-def likelihood(
-    kernel: Kernel,
-    theta: Float[Array, "d"],
-    g: Float[Array, ""],
-    x: Float[Array, "n d"],
-    y: Float[Array, "n"],
-):
-    n, d = x.shape
-
-    # foward of kernel
-    K = cov_fn(kernel, theta, x, x)
-    K = K + jnp.eye(n) * (EPS + g)
-
-    # cholesky of K and compute logdet
-    K_sqrt, is_lower = jsp.linalg.cho_factor(K)
-    logdetK = 2.0 * jnp.sum(jnp.log(jnp.diag(K_sqrt)))
-
-    # compute Ki_1=(K^-1 @ 1) and Ki_y=(K^-1 @ y)
-    Ki_1, Ki_y = jsp.linalg.cho_solve(
-        c_and_lower=(K_sqrt, is_lower),
-        b=jnp.stack([jnp.ones_like(y), y], 1),
-    ).T
-
-    # compute optimal trend b
-    b = (Ki_1 * y).sum() / Ki_1.sum()
-    nu = jnp.dot((y - b) / n, (Ki_y - Ki_1 * b))
-
-    # likelihood when marginalizing over trend and variance
-    loglik = -0.5 * (n * jnp.log(nu) + logdetK)
-    return loglik, b, nu
-
-
-def hetgpy_auto_bounds(
-    x: Float[Array, "n d"], min_cor=0.01, max_cor=0.5
-) -> tuple[Float[Array, "d"], Float[Array, "d"]]:
-    # TODO: this is a post of the bounds for the rbf kernel
-    # should adjust it for matern and make it a method of the gp class
-
-    # rescale X to [0,1]^d
-    x_min, x_max = x.min(axis=0), x.max(axis=0)
-    x = (x - x_min) @ jnp.diag(1 / (x_max - x_min))
-
-    # compute pairwise distances only for proper pair
-    dists = sp.spatial.distance.cdist(x, x) ** 2
-    dists = dists[jnp.tril(dists, k=-1) > 0]
-
-    # magic initialization using inverse of kernel
-    lower = -jnp.quantile(dists, q=0.05) / jnp.log(min_cor) * (x_max - x_min) ** 2
-    upper = -jnp.quantile(dists, q=0.95) / jnp.log(max_cor) * (x_max - x_min) ** 2
-    return lower, upper
-
-
-class GaussianProcess(NamedTuple):
-    kernel: Kernel
-    x: Float[Array, "n d"]
-    y: Float[Array, "n"]
-    theta: Float[Array, "d"]
-    g: Float[Array, ""]
-    b: Float[Array, ""]
-    nu: Float[Array, ""]
-    Koo: Float[Array, "n n"]
-
-    @classmethod
-    def fit(
-        cls,
-        x: Float[Array, "n d"],
-        y: Float[Array, "n"],
-        *,
-        warmstart: Optional[Self] = None,
-        kernel: Kernel = "squaredexponential",
-        max_iterations: int = 100,
-        verbose: bool = False,
-    ):
-        n, d = x.shape
-
-        # initialization
-        lower, upper = hetgpy_auto_bounds(x)
-        init_theta = 0.9 * upper + 0.1 * lower
-        init_g = jnp.minimum(0.1, MAX_NUGGET)
-        if warmstart is not None:
-            init_theta = warmstart.theta
-            init_g = warmstart.g
-        if verbose:
-            print(f"Initial theta: {init_theta}")
-            print(f"Initial g: {init_g}")
-            print()
-
-        # bounds for optimization
-        theta_bounds = jnp.array([lower, upper])
-        g_bounds = jnp.array([EPS, MAX_NUGGET])
-        bounds = jnp.concat([theta_bounds, g_bounds[:, None]], axis=-1)
-        if verbose:
-            print(f"Bounds for theta:")
-            print(f"Min: {bounds[0, ..., :-1]}")
-            print(f"Max: {bounds[1, ..., :-1]}")
-            print(f"Bounds for g:")
-            print(f"Min: {bounds[0, ..., -1]}")
-            print(f"Max: {bounds[1, ..., -1]}")
-            print()
-
-        # define the loss function for optimization
-        @jax.jit
-        @jax.value_and_grad
-        def mle_loss(theta_g: Float[Array, "d+1"]):
-            theta, g = theta_g[:-1], theta_g[-1]
-            loglik, b, nu = likelihood(kernel, theta, g, x, y)
-            return -loglik
-
-        # run optimization
-        result = sp.optimize.minimize(
-            fun=mle_loss,
-            x0=jnp.concatenate([init_theta, init_g[None]]),
-            jac=True,
-            method="L-BFGS-B",
-            bounds=[(a, b) for a, b in zip(*bounds)],
-            options=dict(maxiter=max_iterations, ftol=EPS, gtol=0),
-        )
-
-        # extract the optimal parameters and infer the rest
-        theta, g = result.x[..., :-1], result.x[..., -1]
-        llk, b, nu = likelihood(kernel, theta, g, x, y)
-        Koo = nu * (cov_fn(kernel, theta, x, x) + jnp.eye(n) * (EPS + g))
-        if verbose:
-            print(f"Optimal theta: {theta}")
-            print(f"Optimal g: {g}")
-            print(f"Optimal b: {b}")
-            print(f"Optimal nu: {nu}")
-            print(f"Log-likelihood at optimum: {llk}")
-            print()
-
-        return GaussianProcess(
-            kernel=kernel, x=x, y=y, theta=theta, g=g, b=b, nu=nu, Koo=Koo
-        )
-
-    def update(
-        self,
-        x: Float[Array, "n d"],
-        y: Float[Array, "n"],
-        *,
-        warmstart: bool = True,
-        max_iterations: int = 100,
-        verbose: bool = False,
-    ):
-        x = jnp.concatenate([self.x, x], axis=0)
-        y = jnp.concatenate([self.y, y], axis=0)
-        return self.fit(
-            x,
-            y,
-            kernel=self.kernel,
-            warmstart=self if warmstart else None,
-            max_iterations=max_iterations,
-            verbose=verbose,
-        )
+    @eqx.filter_jit
+    @partial(jax.vmap, in_axes=(None, 0, None), out_axes=0)  # map over x1
+    @partial(jax.vmap, in_axes=(None, None, 0), out_axes=0)  # map over x2
+    def kernel(
+        self, x1: Float[Array, "n d"], x2: Float[Array, "m d"]
+    ) -> Float[Array, "n m"]:
+        # this is defined for a single input pair
+        d = self.kernel_metric(x1, x2)
+        k = self.kernel_profile(d)
+        return k
 
     @eqx.filter_jit
     def predict(self, x: Float[Array, "n d"]) -> Gaussian:
-        theta, g, b, nu = self.theta, self.g, self.b, self.nu
-        n, d = self.x.shape
+        n, d = self.observed_xs.shape
 
-        Kxo = nu * cov_fn(self.kernel, theta, x, self.x)
-        Kxx = nu * cov_fn(self.kernel, theta, x, x)
+        # compute covariance matrices
+        Kxx = self.cov_scale * self.kernel(x, x)
+        Kxo = self.cov_scale * self.kernel(x, self.observed_xs)
+        Koo = self.cov_scale * (
+            self.kernel(self.observed_xs, self.observed_xs) + jnp.eye(n) * self.nugget
+        )
 
         # posterior mean and covariance
-        mean = self.b + Kxo @ jnp.linalg.solve(self.Koo, self.y - self.b)
-        cov = Kxx - Kxo @ jnp.linalg.solve(self.Koo, Kxo.T)
+        mean = self.trend + Kxo @ jnp.linalg.solve(Koo, self.observed_ys - self.trend)
+        cov = Kxx - Kxo @ jnp.linalg.solve(Koo, Kxo.T)
 
         # Add correction based on the trend estimation correlation
-        Kbx = jnp.ones((1, n)) @ jnp.linalg.solve(self.Koo, Kxo.T)
-        cov = cov + (1 - Kbx).T @ (1 - Kbx) / jnp.linalg.inv(self.Koo).sum()
+        Kbx = jnp.ones((1, n)) @ jnp.linalg.solve(Koo, Kxo.T)
+        cov = cov + (1 - Kbx).T @ (1 - Kbx) / jnp.linalg.inv(Koo).sum()
         return Gaussian(mean=mean, cov=cov)
 
     @eqx.filter_jit
-    def expected_improvement(self, x: Float[Array, "n d"]) -> Float[Array, "n"]:
+    def fit(self, x: Float[Array, "n d"], y: Float[Array, "n"]) -> Self:
+        # initialize kernel and nugget, reset other fields
+        model = self.replace(
+            kernel_metric=self.kernel_metric.initialize(x),
+            logit_nugget=jnp.zeros(()),
+            observed_xs=None,  # avoids computing gradients
+            observed_ys=None,  # avoids computing gradients
+            trend=None,  # avoids computing gradients
+            cov_scale=None,  # avoids computing gradients
+        )
+
+        # initialize L-BFGS optimization
+        solver = optax.lbfgs()
+        params, static = eqx.partition(model, eqx.is_array)
+        opt_state = solver.init(params)
+        initial_state = (params, opt_state, jnp.inf, 0.0, 0)
+
+        # define MLE loss function
+        def mle_loss(params) -> Scalar:
+            model = eqx.combine(params, static)
+            loglik, b, nu = model.loglikelihood(x, y)
+            return -loglik
+
+        # early stopping condition (false -> stop)
+        def while_cond_fn(state):
+            params, opt_state, loss, prev_loss, i = state
+            abs_change = jnp.abs(loss - prev_loss)
+            return (i < self.max_fit_iterations) & (abs_change > EPS)
+
+        # optimization step
+        def while_body_fn(state):
+            params, opt_state, loss, prev_loss, i = state
+            prev_loss = loss
+            loss, grad = optax.value_and_grad_from_state(mle_loss)(
+                params, state=opt_state
+            )
+            updates, opt_state = solver.update(
+                grad, opt_state, params, value=loss, grad=grad, value_fn=mle_loss
+            )
+            params = optax.apply_updates(params, updates)
+            return (params, opt_state, loss, prev_loss, i + 1)
+
+        # runs the optimization loop (lowered to a single while op)
+        params, _, loss, _, iters = jax.lax.while_loop(
+            while_cond_fn, while_body_fn, initial_state
+        )
+
+        # write optimized params back into self
+        model: Self = eqx.combine(params, static)  # type: ignore
+        llk, b, nu = model.loglikelihood(x, y)
+        model = model.replace(trend=b, cov_scale=nu, observed_xs=x, observed_ys=y)
+        return model
+
+    def loglikelihood(self, xs: Float[Array, "n d"], ys: Float[Array, "n"]):
+        # foward of kernel
+        K = self.kernel(xs, xs)
+        K = K + jnp.eye(len(ys)) * self.nugget
+
+        # cholesky of K and compute logdet
+        K_sqrt, is_lower = jsp.linalg.cho_factor(K)
+        logdetK = 2.0 * jnp.sum(jnp.log(jnp.diag(K_sqrt)))
+
+        # compute Ki_1=(K^-1 @ 1) and Ki_y=(K^-1 @ y)
+        Ki_1, Ki_y = jsp.linalg.cho_solve(
+            c_and_lower=(K_sqrt, is_lower),
+            b=jnp.stack([jnp.ones_like(ys), ys], 1),
+        ).T
+
+        # compute optimal trend b and scale nu
+        b = (Ki_1 * ys).sum() / Ki_1.sum()
+        nu = jnp.dot((ys - b) / len(ys), (Ki_y - Ki_1 * b))
+
+        # likelihood when marginalizing over trend and variance
+        loglik = -0.5 * (len(ys) * jnp.log(nu) + logdetK)
+        return loglik, b, nu
+
+    @eqx.filter_jit
+    def expected_improvement(self, x: Float[Array, "d"]) -> Scalar:
         # numerically stable version following https://arxiv.org/pdf/2310.20708:
-        # NOTE: it might fail due to numerical precision if the argument of log1mexp is negative
-        # TODO: rewrite it using jnp.where and mock values in place of lax.cond
-        mu, cov = self.predict(x)
-        sigma = jnp.diag(cov) ** 0.5
-        y_star = self.y.min()
-        z = (y_star - mu) / sigma
+        mu, cov = self.predict(x[None, :])
+        mu = mu.squeeze()
+        sigma = cov.squeeze() ** 0.5
+        z = (self.observed_ys.min() - mu) / sigma
 
-        def eval_single(z):
-            branch1 = lambda: jnp.log(z * jsp.stats.norm.cdf(z) + jsp.stats.norm.pdf(z))
-            branch2a = lambda: -2 * jnp.log(-z)
-            branch2b = lambda: jax.nn.log1mexp(
-                -jnp.log(-z)
-                - jsp.stats.norm.logsf(-z)
-                - z**2 / 2
-                - jnp.log(2 * jnp.pi) / 2.0
-            )
-            branch2 = lambda: (
-                -(z**2) / 2
-                - jnp.log(2 * jnp.pi) / 2
-                + jax.lax.cond(z < -1 / jnp.sqrt(EPS), branch2a, branch2b)
-            )
-            return jax.lax.cond(z > -1, branch1, branch2)
-
-        ei = jnp.log(sigma) + jax.vmap(eval_single)(z)
+        # use lax.cond to avoid propagating NaNs in the gradients
+        branch1 = lambda: jnp.log(z * jsp.stats.norm.cdf(z) + jsp.stats.norm.pdf(z))
+        branch2a = lambda: -2 * jnp.log(-z)
+        branch2b = lambda: jax.nn.log1mexp(
+            -jnp.log(-z)
+            - jsp.stats.norm.logsf(-z)
+            - z**2 / 2
+            - jnp.log(2 * jnp.pi) / 2.0
+        )
+        branch2 = lambda: (
+            -(z**2) / 2
+            - jnp.log(2 * jnp.pi) / 2
+            + jax.lax.cond(z < -1 / jnp.sqrt(EPS), branch2a, branch2b)
+        )
+        ei = jnp.log(sigma) + jax.lax.cond(z > -1, branch1, branch2)
         return ei

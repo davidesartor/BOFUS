@@ -1,0 +1,15 @@
+initial_acquisitions: 24
+total_acquisitions: 600
+
+test_function:
+  class_path: LunarLander
+
+model:
+  class_path: GaussianProcess
+  init_args:
+    kernel_metric:
+      class_path: Euclidean
+    kernel_profile:
+      class_path: Matern
+      init_args:
+        nu: 2.5 # 5/2
