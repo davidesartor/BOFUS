@@ -405,7 +405,14 @@ class PushReward:
         return initial_dist - ret1 - ret2
 
 
-from .base import TestFunction, Normalized, Standardized, Array
+from typing import Protocol, NamedTuple
+from jaxtyping import Float, Bool
+from numpy.typing import NDArray as Array
+import numpy as np
+
+
+class TestFunction(Protocol):
+    def __call__(self, x: Float[Array, "d"]) -> Float[Array, ""]: ...
 
 
 class Push(TestFunction):
@@ -413,7 +420,7 @@ class Push(TestFunction):
         self.push = PushReward()
         self.d = len(self.push.xmin)
 
-    def __call__(self, x: Normalized[Array, "d"]) -> Standardized[Array, ""]:
+    def __call__(self, x: Float[Array, "d"]) -> Float[Array, ""]:
         # denormalize input
         lb, ub = self.push.xmin, self.push.xmax
         x = (ub - lb) * x + lb

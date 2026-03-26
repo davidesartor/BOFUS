@@ -863,7 +863,15 @@ def simulate_lunar_rover(p):
 #    demo_heuristic_lander(LunarLanderEnv(), render=False)
 
 
-from .base import TestFunction, Normalized, Standardized, Array
+from typing import Protocol, NamedTuple
+from jaxtyping import Float, Bool
+from numpy.typing import NDArray as Array
+import numpy as np
+
+
+class TestFunction(Protocol):
+    def __call__(self, x: Float[Array, "d"]) -> Float[Array, ""]: ...
+
 
 
 class LunarLander(TestFunction):
@@ -879,7 +887,7 @@ class LunarLander(TestFunction):
             reward = np.array(p.map(simulate_lunar_rover, params)).sum()
         return reward / n
 
-    def __call__(self, x: Normalized[Array, "d"]) -> Standardized[Array, ""]:
+    def __call__(self, x: Float[Array, "d"]) -> Float[Array, ""]:
         # denormalize input
         lb, ub = self.bounds
         x = (ub - lb) * x + lb
