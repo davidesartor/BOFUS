@@ -1,5 +1,5 @@
-from typing import NamedTuple, Literal, Optional, Protocol, Self
-from jaxtyping import Array, Float, Scalar, Key, PyTree
+from typing import Callable, NamedTuple, Self
+from jaxtyping import Array, Float, Scalar, Int, PyTree
 from functools import partial
 
 import jax
@@ -8,13 +8,44 @@ import jax.scipy as jsp
 import jax.random as jr
 import equinox as eqx
 import optax
-import scipy as sp
-import numpy as np
-from tqdm import tqdm
 from . import kernels
 
 jax.config.update("jax_enable_x64", True)
 EPS = float(jnp.sqrt(jnp.finfo(float).eps))
+
+
+def lbfgs_minimize[T: PyTree](
+    f: Callable[[T], Scalar],
+    x0: T,
+    max_iterations: int = 100,
+    ftol: float = EPS,
+    gtol: float = 0.0,  # TODO: add gtol stopping condition
+) -> tuple[T, Scalar, Int]:
+    # initialize L-BFGS optimization
+    solver = optax.lbfgs()
+    opt = solver.init(x0)
+    initial_state = (x0, opt, jnp.inf, 0.0, 0)
+
+    # early stopping condition (false -> stop)
+    def while_cond_fn(state):
+        x, opt, loss, prev_loss, i = state
+        abs_change = jnp.abs(loss - prev_loss)
+        return (i < max_iterations) & (abs_change > ftol)
+
+    # optimization step
+    def while_body_fn(state):
+        x, opt, loss, prev_loss, i = state
+        prev_loss = loss
+        loss, grad = optax.value_and_grad_from_state(f)(x, state=opt)
+        updates, opt = solver.update(grad, opt, x, value=loss, grad=grad, value_fn=f)
+        x = optax.apply_updates(x, updates)
+        return (x, opt, loss, prev_loss, i + 1)
+
+    # runs the optimization loop (lowered to a single while op)
+    x, _, loss, _, iters = jax.lax.while_loop(
+        while_cond_fn, while_body_fn, initial_state
+    )
+    return x, loss, iters  # type: ignore
 
 
 class Gaussian(NamedTuple):
@@ -54,12 +85,12 @@ class GaussianProcess(kernels.Module):
         return k
 
     @eqx.filter_jit
-    def predict(self, x: Float[Array, "n d"]) -> Gaussian:
+    def predict(self, xs: Float[Array, "n d"]) -> Gaussian:
         n, d = self.observed_xs.shape
 
         # compute covariance matrices
-        Kxx = self.cov_scale * self.kernel(x, x)
-        Kxo = self.cov_scale * self.kernel(x, self.observed_xs)
+        Kxx = self.cov_scale * self.kernel(xs, xs)
+        Kxo = self.cov_scale * self.kernel(xs, self.observed_xs)
         Koo = self.cov_scale * (
             self.kernel(self.observed_xs, self.observed_xs) + jnp.eye(n) * self.nugget
         )
@@ -74,10 +105,10 @@ class GaussianProcess(kernels.Module):
         return Gaussian(mean=mean, cov=cov)
 
     @eqx.filter_jit
-    def fit(self, x: Float[Array, "n d"], y: Float[Array, "n"]) -> Self:
+    def fit(self, xs: Float[Array, "n d"], ys: Float[Array, "n"]) -> Self:
         # initialize kernel and nugget, reset other fields
         model = self.replace(
-            kernel_metric=self.kernel_metric.initialize(x),
+            kernel_metric=self.kernel_metric.initialize(xs),
             logit_nugget=jnp.zeros(()),
             observed_xs=None,  # avoids computing gradients
             observed_ys=None,  # avoids computing gradients
@@ -86,48 +117,27 @@ class GaussianProcess(kernels.Module):
         )
 
         # initialize L-BFGS optimization
-        solver = optax.lbfgs()
         params, static = eqx.partition(model, eqx.is_array)
-        opt_state = solver.init(params)
-        initial_state = (params, opt_state, jnp.inf, 0.0, 0)
 
         # define MLE loss function
         def mle_loss(params) -> Scalar:
             model = eqx.combine(params, static)
-            loglik, b, nu = model.loglikelihood(x, y)
+            loglik, b, nu = model.loglikelihood(xs, ys)
             return -loglik
 
-        # early stopping condition (false -> stop)
-        def while_cond_fn(state):
-            params, opt_state, loss, prev_loss, i = state
-            abs_change = jnp.abs(loss - prev_loss)
-            return (i < self.max_fit_iterations) & (abs_change > EPS)
-
-        # optimization step
-        def while_body_fn(state):
-            params, opt_state, loss, prev_loss, i = state
-            prev_loss = loss
-            loss, grad = optax.value_and_grad_from_state(mle_loss)(
-                params, state=opt_state
-            )
-            updates, opt_state = solver.update(
-                grad, opt_state, params, value=loss, grad=grad, value_fn=mle_loss
-            )
-            params = optax.apply_updates(params, updates)
-            return (params, opt_state, loss, prev_loss, i + 1)
-
-        # runs the optimization loop (lowered to a single while op)
-        params, _, loss, _, iters = jax.lax.while_loop(
-            while_cond_fn, while_body_fn, initial_state
+        params, loss, iters = lbfgs_minimize(
+            mle_loss, params, max_iterations=self.max_fit_iterations
         )
 
         # write optimized params back into self
-        model: Self = eqx.combine(params, static)  # type: ignore
-        llk, b, nu = model.loglikelihood(x, y)
-        model = model.replace(trend=b, cov_scale=nu, observed_xs=x, observed_ys=y)
+        model: Self = eqx.combine(params, static)  
+        llk, b, nu = model.loglikelihood(xs, ys)
+        model = model.replace(trend=b, cov_scale=nu, observed_xs=xs, observed_ys=ys)
         return model
 
-    def loglikelihood(self, xs: Float[Array, "n d"], ys: Float[Array, "n"]):
+    def loglikelihood(
+        self, xs: Float[Array, "n d"], ys: Float[Array, "n"]
+    ) -> tuple[Scalar, Scalar, Scalar]:
         # foward of kernel
         K = self.kernel(xs, xs)
         K = K + jnp.eye(len(ys)) * self.nugget
