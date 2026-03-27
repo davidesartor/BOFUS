@@ -68,8 +68,8 @@ def hetgpy_scale_init(
     d_fn = lambda a, b: norm(a - b)
     d_fn = jax.vmap(jax.vmap(d_fn, (None, 0)), (0, None))
     dists = d_fn(x, x) ** 2  # squared distances
-    dists = dists[*jnp.tril_indices(x.shape[-1], k=-1)]
-
+    dists = dists[*jnp.tril_indices(len(dists), k=-1)]
+    
     # magic hetgpy initialization using inverse of kernel
     lower = -jnp.quantile(dists, q=0.05) / jnp.log(min_cor) * (x_max - x_min) ** 2
     upper = -jnp.quantile(dists, q=0.95) / jnp.log(max_cor) * (x_max - x_min) ** 2
