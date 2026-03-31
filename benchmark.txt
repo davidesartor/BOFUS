@@ -1,0 +1,9 @@
+Ackley - d=5,d=10,d=20
+Levy - d=5,d=10,d=20
+Rastrigin - d=5,d=10,d=20
+Rosenbrock - d=5,d=10,d=20
+
+Hartmann3
+Hartmann4
+Hartmann6
+Branin
