@@ -5,20 +5,21 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 from jax.numpy.linalg import norm
 import equinox as eqx
-from einops import rearrange
-
-class Module(eqx.Module):
-    def replace(self, **kwargs)-> Self:
-        where = lambda m: tuple(getattr(m, k) for k in kwargs.keys())
-        return eqx.tree_at(where, self, kwargs.values(), is_leaf=lambda x: x is None)
-    
-
-################################################################################
-# region Kernel Profiles
+from .utils import Module, EPS
 
 
 class Profile(Module):
     def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]: ...
+
+
+class Metric[T: PyTree](Module):
+    def initialize(self, xs: list[T]) -> Self: ...
+
+    def __call__(self, x1: T, x2: T) -> Scalar: ...
+
+
+################################################################################
+# region Kernel Profiles
 
 
 class SquaredExponential(Profile):
@@ -51,12 +52,6 @@ class Matern(Profile):
 # region Metrics on R^d
 
 
-class Metric[T: PyTree](Module):
-    def initialize(self, xs: T) -> Self: ...
-
-    def __call__(self, x1: T, x2: T) -> Scalar: ...
-
-
 def hetgpy_scale_init(
     x: Float[Array, "n d"], min_cor: float = 0.01, max_cor: float = 0.5
 ) -> Float[Array, "d"]:
@@ -81,8 +76,8 @@ class Minkowski(Metric[Float[Array, "d"]]):
     p: int | Literal["inf", "-inf"]
     log_scale: Float[Array, "d"] | None = None
 
-    def initialize(self, xs: Float[Array, "n d"]) -> Self:
-        scale = hetgpy_scale_init(xs)
+    def initialize(self, xs: list[Float[Array, "d"]]) -> Self:
+        scale = hetgpy_scale_init(jnp.stack(xs))
         return self.replace(log_scale=jnp.log(scale))
 
     def __call__(self, x1: Float[Array, "d"], x2: Float[Array, "d"]) -> Scalar:
@@ -92,34 +87,30 @@ class Minkowski(Metric[Float[Array, "d"]]):
         else:
             v = x1 - x2  # default to unscaled Minkowski metric
 
-        # use lax.cond to avoid NaNs in grad when d==0
-        return jax.lax.cond(
-            (v==0).all(),
-            lambda: 0.0,
-            lambda: norm(v, self.p),
-        )
-    
+        # add EPS to avoid NaNs in gradients when d==0
+        return norm(v, ord=self.p) + EPS
+
 
 class Euclidean(Minkowski):
-    def __init__(self):
-        super().__init__(p=2)
+    def __init__(self, *args, **kwargs):
+        super().__init__(p=2, *args, **kwargs)
 
 
 class Manhattan(Minkowski):
-    def __init__(self):
-        super().__init__(p=1)
+    def __init__(self, *args, **kwargs):
+        super().__init__(p=1, *args, **kwargs)
 
 
 class Chebyshev(Minkowski):
-    def __init__(self):
-        super().__init__(p="inf")
+    def __init__(self, *args, **kwargs):
+        super().__init__(p="inf", *args, **kwargs)
         
 
 class Mahalanobis(Metric[Float[Array, "d"]]):
     log_cov: Float[Array, "d d"] | None = None
 
-    def initialize(self, xs: Float[Array, "n d"]) -> Self:
-        scale = hetgpy_scale_init(xs)
+    def initialize(self, xs: list[Float[Array, "d"]]) -> Self:
+        scale = hetgpy_scale_init(jnp.stack(xs))
         log_cov = jnp.log(jnp.diag(scale**2))
         return self.replace(log_cov=log_cov)
 
@@ -133,12 +124,8 @@ class Mahalanobis(Metric[Float[Array, "d"]]):
         else:
             v = x1 - x2  # default to Euclidean metric
         
-        # use lax.cond to avoid NaNs in grad when d==0
-        return jax.lax.cond(
-            (v==0).all(), 
-            lambda: 0.0, 
-            lambda: norm(v, ord=2),
-        )
+        # add EPS to avoid NaNs in gradients when d==0
+        return norm(v, ord=2) + EPS
 
 
 # endregion
@@ -156,28 +143,33 @@ class RKHSFunction(NamedTuple):
 
 
 class MaximumMeanDiscrepancy(Metric[RKHSFunction]):
-    rkhs_kernel_metric: Metric[Float[Array, "d"]] = eqx.field(static=True)
-    rkhs_kernel_profile: Profile = eqx.field(static=True)
+    rkhs_metric: Metric[Float[Array, "d"]] = eqx.field(static=True)
+    rkhs_profile: Profile = eqx.field(static=True)
     log_scale: Scalar | None = None
 
-    def initialize(self, xs: RKHSFunction) -> Self:
-        # TODO: handle properly the initialization
-        x = rearrange(xs.x, "k n d -> (k n) d")
-        rkhs_kernel_metric = self.rkhs_kernel_metric.initialize(x)
-        ...
-        return self.replace(rkhs_kernel_metric=rkhs_kernel_metric)
+    def initialize(self, xs: list[RKHSFunction]) -> Self:
+        return self.replace(log_scale=jnp.zeros(()))
 
     def __call__(self, x1: RKHSFunction, x2: RKHSFunction) -> Scalar:
-        kernel = lambda a, b: self.rkhs_kernel_profile(self.rkhs_kernel_metric(a, b))
+        kernel = lambda a, b: self.rkhs_profile(self.rkhs_metric(a, b))
+        kernel = jax.vmap(jax.vmap(kernel, in_axes=(None, 0)), in_axes=(0, None))
         K11 = kernel(x1.x, x1.x)
         K12 = kernel(x1.x, x2.x)
         K22 = kernel(x2.x, x2.x)
 
-        d2 = x1.a @ K11 @ x1.a - 2 * x1.a @ K12 @ x2.a + x2.a @ K22 @ x2.a
-        d = jnp.sqrt(d2)
+        if NAIVE_PARAMETRIZATION := True:
+            a1 = x1.a
+            a2 = x2.a
+        else:
+            a1 = jnp.linalg.solve(K11, x1.y)
+            a2 = jnp.linalg.solve(K22, x2.y)
+
+        d2 = +a1 @ K11 @ a1 + a2 @ K22 @ a2 - 2 * a1 @ K12 @ a2
+
+        d = jnp.sqrt(d2 + EPS)
         if self.log_scale is not None:
             scale = jnp.exp(self.log_scale)
-            d = d / jnp.sqrt(scale)
+            d = d / scale
         return d
 
 
