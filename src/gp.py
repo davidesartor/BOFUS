@@ -1,6 +1,5 @@
 from typing import Callable, NamedTuple, Self
 from jaxtyping import Array, Float, Scalar, Int, PyTree
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -9,43 +8,7 @@ import jax.random as jr
 import equinox as eqx
 import optax
 from . import kernels
-
-jax.config.update("jax_enable_x64", True)
-EPS = float(jnp.sqrt(jnp.finfo(float).eps))
-
-
-def lbfgs_minimize[T: PyTree](
-    f: Callable[[T], Scalar],
-    x0: T,
-    max_iterations: int = 100,
-    ftol: float = EPS,
-    gtol: float = 0.0,  # TODO: add gtol stopping condition
-) -> tuple[T, Scalar, Int]:
-    # initialize L-BFGS optimization
-    solver = optax.lbfgs()
-    opt = solver.init(x0)
-    initial_state = (x0, opt, jnp.inf, 0.0, 0)
-
-    # early stopping condition (false -> stop)
-    def while_cond_fn(state):
-        x, opt, loss, prev_loss, i = state
-        abs_change = jnp.abs(loss - prev_loss)
-        return (i < max_iterations) & (abs_change > ftol)
-
-    # optimization step
-    def while_body_fn(state):
-        x, opt, loss, prev_loss, i = state
-        prev_loss = loss
-        loss, grad = optax.value_and_grad_from_state(f)(x, state=opt)
-        updates, opt = solver.update(grad, opt, x, value=loss, grad=grad, value_fn=f)
-        x = optax.apply_updates(x, updates)
-        return (x, opt, loss, prev_loss, i + 1)
-
-    # runs the optimization loop (lowered to a single while op)
-    x, _, loss, _, iters = jax.lax.while_loop(
-        while_cond_fn, while_body_fn, initial_state
-    )
-    return x, loss, iters  # type: ignore
+from .utils import Module, EPS, lbfgs_minimize
 
 
 class Gaussian(NamedTuple):
@@ -53,8 +16,8 @@ class Gaussian(NamedTuple):
     cov: Float[Array, "n n"]
 
 
-class GaussianProcess(kernels.Module):
-    kernel_metric: kernels.Metric
+class GaussianProcess[T: PyTree](Module):
+    kernel_metric: kernels.Metric[T]
     kernel_profile: kernels.Profile
     nugget_range: tuple[float, float] = (EPS, 1e-3)
     max_fit_iterations: int = 100
@@ -65,7 +28,7 @@ class GaussianProcess(kernels.Module):
     trend: Scalar = eqx.field(default=None)
 
     # observed data
-    observed_xs: Float[Array, "n d"] = eqx.field(default=None)
+    observed_xs: list[T] = eqx.field(default=None)
     observed_ys: Float[Array, "n"] = eqx.field(default=None)
 
     @property
@@ -74,20 +37,15 @@ class GaussianProcess(kernels.Module):
         return lb + (ub - lb) * jax.nn.sigmoid(self.logit_nugget)
 
     @eqx.filter_jit
-    @partial(jax.vmap, in_axes=(None, 0, None), out_axes=0)  # map over x1
-    @partial(jax.vmap, in_axes=(None, None, 0), out_axes=0)  # map over x2
-    def kernel(
-        self, x1: Float[Array, "n d"], x2: Float[Array, "m d"]
-    ) -> Float[Array, "n m"]:
-        # this is defined for a single input pair
-        # the type signature is the result of the double vmap
-        d = self.kernel_metric(x1, x2)
+    def kernel(self, x1: list[T], x2: list[T]) -> Float[Array, "n m"]:
+        # stack list of pytrees into a single pytree of arrays
+        d = jnp.array([[self.kernel_metric(xi, xj) for xj in x2] for xi in x1])
         k = self.kernel_profile(d)
         return k
 
     @eqx.filter_jit
-    def predict(self, xs: Float[Array, "n d"]) -> Gaussian:
-        n, d = self.observed_xs.shape
+    def predict(self, xs: list[T]) -> Gaussian:
+        n = len(self.observed_ys)
 
         # compute covariance matrices
         Kxx = self.cov_scale * self.kernel(xs, xs)
@@ -106,7 +64,7 @@ class GaussianProcess(kernels.Module):
         return Gaussian(mean=mean, cov=cov)
 
     @eqx.filter_jit
-    def fit(self, xs: Float[Array, "n d"], ys: Float[Array, "n"]) -> Self:
+    def fit(self, xs: list[T], ys: Float[Array, "n"]) -> Self:
         # initialize kernel and nugget, reset other fields
         model = self.replace(
             kernel_metric=self.kernel_metric.initialize(xs),
@@ -116,7 +74,6 @@ class GaussianProcess(kernels.Module):
             trend=None,  # avoids computing gradients
             cov_scale=None,  # avoids computing gradients
         )
-
         # initialize L-BFGS optimization
         params, static = eqx.partition(model, eqx.is_array)
 
@@ -137,7 +94,7 @@ class GaussianProcess(kernels.Module):
         return model
 
     def loglikelihood(
-        self, xs: Float[Array, "n d"], ys: Float[Array, "n"]
+        self, xs: list[T], ys: Float[Array, "n"]
     ) -> tuple[Scalar, Scalar, Scalar]:
         # foward of kernel
         K = self.kernel(xs, xs)
@@ -162,9 +119,9 @@ class GaussianProcess(kernels.Module):
         return loglik, b, nu
 
     @eqx.filter_jit
-    def log_expected_improvement(self, x: Float[Array, "d"]) -> Scalar:
+    def log_expected_improvement(self, x: T) -> Scalar:
         # numerically stable version following https://arxiv.org/pdf/2310.20708:
-        mu, cov = self.predict(x[None, :])
+        mu, cov = self.predict([x])
         mu = mu.squeeze()
         sigma = cov.squeeze() ** 0.5
         z = (self.observed_ys.min() - mu) / sigma

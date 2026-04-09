@@ -1,5 +1,6 @@
 from typing import Literal
-from jaxtyping import Array, Float
+import warnings
+from jaxtyping import Array, Float, PyTree
 from numpy.typing import NDArray as Array
 import jax
 import jax.numpy as jnp
@@ -9,16 +10,19 @@ import numpy as np
 from .gp import GaussianProcess, EPS
 
 
-class AcquisitionStrategy(eqx.Module):
-    def __call__(self, model: GaussianProcess, q: int = 1) -> Float[Array, "q d"]: ...
+class AcquisitionStrategy[T: PyTree](eqx.Module):
+    def __call__(self, model: GaussianProcess[T], q: int = 1) -> list[T]: ...
 
 
-class LHS(AcquisitionStrategy):
+################################################################################
+# region Acquisition on R^d
+
+class LHS(AcquisitionStrategy[Float[Array, "d"]]):
     multi_starts: int
 
-    def __call__(self, model: GaussianProcess, q: int = 1) -> Float[Array, "q d"]:
+    def __call__(self, model: GaussianProcess[Float[Array, "d"]], q: int = 1) -> list[Float[Array, "d"]]:
         # sample initial guess for candidate points
-        n, d = model.observed_xs.shape
+        d = len(model.observed_xs[0])
         lhs_sampler = sp.stats.qmc.LatinHypercube(d=d, seed=np.random.mtrand._rand)
         x = lhs_sampler.random(n=self.multi_starts)
 
@@ -28,16 +32,16 @@ class LHS(AcquisitionStrategy):
         return x[best_dx[:q]]
 
 
-class BFGS(AcquisitionStrategy):
+class BFGS(AcquisitionStrategy[Float[Array, "d"]]):
     multi_starts: int
     raw_samples: int = 512
     max_iterations: int = 100
     ftol: float = EPS
     gtol: float = 0.0
 
-    def __call__(self, model: GaussianProcess, q: int = 1) -> Float[Array, "q d"]:
+    def __call__(self, model: GaussianProcess, q: int = 1) -> list[Float[Array, "d"]]:
         # sample initial guess for candidate points
-        n, d = model.observed_xs.shape
+        d = len(model.observed_xs[0])
         lhs_sampler = sp.stats.qmc.LatinHypercube(d=d, seed=np.random.mtrand._rand)
         x = lhs_sampler.random(n=self.raw_samples)
 
@@ -51,10 +55,18 @@ class BFGS(AcquisitionStrategy):
         @jax.value_and_grad
         def loss(x):
             return -model.log_expected_improvement(x)
+        
+        def verbose_loss(x):
+            val, grad = loss(x)
+            if jnp.isnan(val):
+                warnings.warn("Warning: NaN encountered in loss!")
+            if jnp.isnan(grad).any():
+                warnings.warn("Warning: NaN encountered in gradient!")
+            return val, grad
 
         results = [
             sp.optimize.minimize(
-                fun=loss,
+                fun=verbose_loss,
                 x0=xi,
                 jac=True,
                 method="L-BFGS-B",
@@ -71,17 +83,17 @@ class BFGS(AcquisitionStrategy):
         # sort results and return best q
         x = np.array([result.x for result in results])
         idx = np.argsort(np.array([result.fun for result in results]))
-        return x[idx[:q]]
-
-
-class Voronoi(AcquisitionStrategy):
+        return list(x[idx[:q]])
+    
+    
+class Voronoi(AcquisitionStrategy[Float[Array, "d"]]):
     multi_starts: int
     binary_search_steps: int = 30
     sampling_strategy: Literal["uniform", "proj"] = "uniform"
 
-    def __call__(self, model: GaussianProcess, q: int = 1) -> Float[Array, "q d"]:
+    def __call__(self, model: GaussianProcess, q: int = 1) -> list[Float[Array, "d"]]:
         # sample initial guess for candidate points
-        n, d = model.observed_xs.shape
+        d = len(model.observed_xs[0])
         lhs_sampler = sp.stats.qmc.LatinHypercube(d=d, seed=np.random.mtrand._rand)
         x0 = lhs_sampler.random(n=self.multi_starts)
         cell_centers = np.argmin(
@@ -118,4 +130,4 @@ class Voronoi(AcquisitionStrategy):
         x = np.clip(x0 + direction * m[..., None], 0, 1)
         values = np.array([model.log_expected_improvement(xi) for xi in x])
         best_idx = np.argsort(values)[-q:]
-        return x[best_idx]
+        return list(x[best_idx])
