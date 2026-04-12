@@ -49,7 +49,7 @@ def run(
 
     # initial acquisition (work with flat, normalized parameters in [0, 1])
     k = min_basis_points
-    d = 1  # assuming 1-dimensional input
+    d = 3  # assuming 1-dimensional input
     sampler = sp.stats.qmc.LatinHypercube(d=k * (d + 1), rng=rng)
     ps = sampler.random(n=initial_acquisitions)
 
@@ -89,35 +89,101 @@ def run(
 
             print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}")
 
+        import gymnasium as gym
+        from gymnasium.utils.save_video import save_video
+
+        env = gym.make("Pendulum-v1", render_mode="rgb_array_list")
+
+        for i in range(10):
+            obs, _ = env.reset(seed=i)
+            for _ in range(400):
+                # normalize the observation to be in the range [0, 1]
+                lb = env.observation_space.low
+                ub = env.observation_space.high
+                obs = (obs - lb) / (ub - lb)
+
+                # magic happens here and we get an action in [-1, 1]
+                action = fs[ys.argmin()](obs)
+
+                # scale the action to the action space of the environment
+                action = (action + 1.0) / 2.0  # [-1, 1] -> [0, 1]
+                lb = env.action_space.low
+                ub = env.action_space.high
+                action = lb + (action + 1.0) * 0.5 * (ub - lb)  # [0, 1] -> [lb, ub]
+
+                # step the environment
+                obs, reward, terminated, truncated, _ = env.step(action)
+                if terminated or truncated:
+                    break
+
+            save_video(
+                frames=env.render(),
+                video_folder="gifs",
+                name_prefix=f"pendulum{k}_iter{i}",
+                fps=env.metadata["render_fps"],
+                episode_index=0,
+            )
+
     return ys
 
 
 if __name__ == "__main__":
     seed = 0
-    initial_acquisitions = 10
-    min_basis_points = 1
-    max_basis_points = 5
-    acquisitions_each = 10
-    acquisition_raw_samples = 1000
-    acquisition_max_restarts = 16
+    initial_acquisitions = 20
+    min_basis_points = 5
+    max_basis_points = 10
+    acquisitions_each = 30
+    acquisition_raw_samples = 1024 * 16
+    acquisition_max_restarts = 64
 
     rkhs = gp.RKHS(
         metric=kernels.Euclidean(),
         profile=kernels.SquaredExponential(),
-        rho=1 / (4 * jnp.pi),  # type: ignore
+        rho=0.1,  # type: ignore
     )
 
-    def target_fn(f, n: int = 10000, d: int = 1) -> Scalar:
-        x = np.random.rand(n, d)
-        y = np.sinc(x * 2 * jnp.pi - jnp.pi).prod(-1)
-        pred = np.array([f(xi) for xi in x])
-        return np.mean(np.square(pred - y))
+    def target_fn(f, n_rollouts=50):
+        import gymnasium as gym
+
+        env = gym.make("Pendulum-v1")
+
+        def rollout(seed):
+            obs, _ = env.reset(seed=seed)
+            rewards = []
+            for _ in range(400):
+                # normalize the observation to be in the range [0, 1]
+                lb = env.observation_space.low
+                ub = env.observation_space.high
+                obs = (obs - lb) / (ub - lb)
+
+                # magic happens here and we get an action in [-1, 1]
+                action = f(obs)
+
+                # scale the action to the action space of the environment
+                action = (action + 1.0) / 2.0  # [-1, 1] -> [0, 1]
+                lb = env.action_space.low
+                ub = env.action_space.high
+                action = lb + (action + 1.0) * 0.5 * (ub - lb)  # [0, 1] -> [lb, ub]
+
+                # step the environment
+                obs, reward, terminated, truncated, _ = env.step(action)
+                rewards.append(reward)
+                if terminated or truncated:
+                    break
+
+            J = sum([r * (0.99**t) for t, r in enumerate(rewards)])
+            return J
+
+        returns = [rollout(seed) for seed in range(n_rollouts)]
+        return -np.mean(returns)
 
     ys = run(
         seed=seed,
         target_fn=target_fn,
         rkhs=rkhs,
-        surrogate_model=gp.FunctionalGaussianProcess(),
+        surrogate_model=gp.FunctionalGaussianProcess(
+            profile=kernels.SquaredExponential()
+        ),
         initial_acquisitions=initial_acquisitions,
         min_basis_points=min_basis_points,
         max_basis_points=max_basis_points,
