@@ -8,6 +8,7 @@ import numpy as np
 import argparse
 import time
 import os
+import pickle
 
 from src import gp, kernels, acquisition, rkhs, targets
 
@@ -94,7 +95,7 @@ def run_wycoff(
             surrogate_fit_time += time.time() - timer
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
-            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}")
+            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
 
     return dict(
         observation_locations=fs,
@@ -191,7 +192,7 @@ def run_vellanky(
             surrogate_fit_time += time.time() - timer
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
-            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}")
+            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
 
     return dict(
         observation_locations=fs,
@@ -300,7 +301,7 @@ def run_kundu(
             surrogate_fit_time += time.time() - timer
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
-            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}")
+            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
 
     return dict(
         observation_locations=fs,
@@ -427,7 +428,7 @@ def run_vien(
             surrogate_fit_time += time.time() - timer
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
-            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}")
+            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
 
     return dict(
         observation_locations=fs,
@@ -532,7 +533,7 @@ def run_shilton(
             surrogate_fit_time += time.time() - timer
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
-            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}")
+            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
 
     return dict(
         observation_locations=fs,
@@ -600,5 +601,5 @@ if __name__ == "__main__":
     save_dir = f"results/{args.method}/{args.target_fn}/lengthscale_{args.lengthscale}/"
     os.makedirs(save_dir, exist_ok=True)
     save_path = f"{save_dir}/seed_{args.seed}"
-    np.savez_compressed(save_path, **results)
+    pickle.dump(results, open(f"{save_path}.pkl", "wb"))
     print(f"Results saved to {save_path}.npz")

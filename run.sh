@@ -13,7 +13,7 @@ sbatch --job-name="${method}_${target_fn}_${lengthscale}" <<EOF
 #SBATCH --array=0-$((runs - 1))
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=64G
+#SBATCH --mem=60G
 #SBATCH --time=08:00:00
 #SBATCH --partition=cpu
 

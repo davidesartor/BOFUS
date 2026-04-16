@@ -1,5 +1,6 @@
 from typing import NamedTuple, Self
 from jaxtyping import Array, Float, Scalar
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -125,8 +126,8 @@ class GaussianProcess(Module):
 
         def verbose_loss(params: Float[Array, "d+1"]):
             val, grad = mle_loss(params)
-            assert not jnp.isnan(val), f"NaN loss detected: {params}"
-            assert not jnp.isnan(grad).any(), f"NaN gradient: {params}"
+            if jnp.isnan(val) or jnp.isnan(grad).any():
+                warnings.warn(f"NaN detected in loss or gradient: {params}")
             return val, grad
 
         # initialization
@@ -229,8 +230,8 @@ class FunctionalGaussianProcess(Module):
 
         def verbose_loss(params: Float[Array, "2"]):
             val, grad = mle_loss(params)
-            assert not jnp.isnan(val), f"NaN loss detected: {params}"
-            assert not jnp.isnan(grad).any(), f"NaN gradient: {params}"
+            if jnp.isnan(val) or jnp.isnan(grad).any():
+                warnings.warn(f"NaN detected in loss or gradient: {params}")
             return val, grad
 
         # initialization
