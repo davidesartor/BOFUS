@@ -24,7 +24,7 @@ class MNIST(TestFunction):
         seed: int = 0,
         n_runs: int = 1,
         batch_size: int = 100,
-        width_size: int = 256,
+        width_size: int = 128,
         depth: int = 2,
         lr: float = 1e-3,
         epochs: int = 5,
@@ -40,25 +40,25 @@ class MNIST(TestFunction):
         self.n_runs = n_runs
 
         # load mnist dataset and preprocess (scale input to [0, 1])
-        train_dataset = torchvision.datasets.MNIST(root="./data", train=True)
-        test_dataset = torchvision.datasets.MNIST(root="./data", train=False)
+        train_dataset = torchvision.datasets.MNIST(root="./data", train=True, download=True)
+        test_dataset = torchvision.datasets.MNIST(root="./data", train=False, download=True)
         self.train_data: Float[Array, "n 28*28"] = jnp.array(train_dataset.data) / 255.0
         self.train_labels: Int[Array, "n"] = jnp.array(train_dataset.targets)
         self.test_data: Float[Array, "m 28*28"] = jnp.array(test_dataset.data) / 255.0
         self.test_labels: Int[Array, "m"] = jnp.array(test_dataset.targets)
 
     def __call__(self, f: Callable[[Float[Array, "1"]], Scalar]) -> Scalar:
-        # vectorize initialization, fitting, and testing across runs
-        vectorized_init = eqx.filter_vmap(lambda k: self.initialize(k, f))
-        vectorized_fit = eqx.filter_jit(eqx.filter_vmap(self.fit))
-        vectorized_test = eqx.filter_jit(eqx.filter_vmap(self.test))
-
-        # run simulations in parallel across runs
-        key_init, key_fit = jr.split(jr.key(self.seed))
-        networks = vectorized_init(jr.split(key_init, self.n_runs))
-        network, train_losses = vectorized_fit(networks, jr.split(key_fit, self.n_runs))
-        test_loss, test_acc = vectorized_test(network)
-        return 1 - test_acc.mean()
+        init = eqx.filter_jit(lambda k: self.initialize(k, f))
+        fit = eqx.filter_jit(self.fit)
+        test = eqx.filter_jit(self.test)
+        accuracy = []
+        for key in jr.split(jr.key(self.seed), self.n_runs):
+            key_init, key_fit = jr.split(key)
+            network = init(key_init)
+            network, train_losses = fit(network, key_fit)
+            test_loss, test_accuracy = test(network)
+            accuracy.append(test_accuracy)
+        return 1 - jnp.array(accuracy).mean()
 
     def initialize(self, key: Key, f: Callable[[Float[Array, "1"]], Scalar]):
         activation = lambda x: f((x[None] + 3.0) / 6.0) + jax.nn.celu(x)
