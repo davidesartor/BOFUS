@@ -548,7 +548,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method", choices=["wycoff", "vellanky", "vien", "kundu", "shilton"]
     )
-    parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum"])
+    parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum", "ackley"])
     parser.add_argument("--lengthscale", type=float, required=True)
     parser.add_argument("--seed", type=int, required=True)
     # simulation parameters
@@ -565,6 +565,7 @@ if __name__ == "__main__":
         "mnist": targets.MNIST,
         "sinc": targets.SincProjection,
         "pendulum": targets.Pendulum,
+        "ackley": lambda: targets.Ridge(targets.virtual_library.Ackley(), d=2),
     }[args.target_fn]()
     kernel = rkhs.RKHS(
         metric=kernels.Euclidean(),

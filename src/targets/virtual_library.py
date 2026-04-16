@@ -31,10 +31,7 @@ class Ackley(TestFunction):
 
     def __call__(self, x: Float[Array, "... d"]) -> Float[Array, "..."]:
         # denormalize to [-32.768, 32.768]
-        # x = 65.536 * x - 32.768
-        # NOTE: we are using the range of botorch example here, not the one recommended by virtual library
-        # denormalize to [-5, 10]
-        x = 15 * x -5
+        x = 65.536 * x - 32.768
 
         # port of R implementation from https://www.sfu.ca/~ssurjano/Code/ackleyr.html
         mean1 = jnp.mean(x**2, axis=-1)
