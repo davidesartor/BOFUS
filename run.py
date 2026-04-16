@@ -551,6 +551,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum", "ackley"])
     parser.add_argument("--lengthscale", type=float, required=True)
+    parser.add_argument(
+        "--profile",
+        choices=["rbf", "matern12", "matern32", "matern52"],
+        default="rbf",
+    )
     parser.add_argument("--seed", type=int, required=True)
     # simulation parameters
     parser.add_argument("--initial_acquisitions", type=int, default=10)
@@ -575,12 +580,18 @@ if __name__ == "__main__":
     )
 
     # simulation setup
+    profile = {
+        "rbf": kernels.SquaredExponential(),
+        "matern12": kernels.Matern(nu=1 / 2),
+        "matern32": kernels.Matern(nu=3 / 2),
+        "matern52": kernels.Matern(nu=5 / 2),
+    }[args.profile]
     run_simulation_fn, surrogate_model = {
-        "wycoff": (run_wycoff, gp.FunctionalGaussianProcess()),
-        "vellanky": (run_vellanky, gp.GaussianProcess()),
-        "kundu": (run_kundu, gp.FunctionalGaussianProcess()),
-        "vien": (run_vien, gp.FunctionalGaussianProcess()),
-        "shilton": (run_shilton, gp.FunctionalGaussianProcess()),
+        "wycoff": (run_wycoff, gp.FunctionalGaussianProcess(profile=profile)),
+        "vellanky": (run_vellanky, gp.GaussianProcess(profile=profile)),
+        "kundu": (run_kundu, gp.FunctionalGaussianProcess(profile=profile)),
+        "vien": (run_vien, gp.FunctionalGaussianProcess(profile=profile)),
+        "shilton": (run_shilton, gp.FunctionalGaussianProcess(profile=profile)),
     }[args.method]
 
     # run simulation
@@ -598,7 +609,7 @@ if __name__ == "__main__":
     )
 
     # save results
-    save_dir = f"results/{args.method}/{args.target_fn}/lengthscale_{args.lengthscale}/"
+    save_dir = f"results/{args.method}_{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}/"
     os.makedirs(save_dir, exist_ok=True)
     save_path = f"{save_dir}/seed_{args.seed}"
     pickle.dump(results, open(f"{save_path}.pkl", "wb"))

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 
-method=${1:?Usage: bash $0 <method> <target_fn> <lengthscale> <runs>}
-target_fn=${2:?Usage: bash $0 <method> <target_fn> <lengthscale> <runs>}
-lengthscale=${3:?Usage: bash $0 <method> <target_fn> <lengthscale> <runs>}
-runs=${4:?Usage: bash $0 <method> <target_fn> <lengthscale> <runs>}
+method=${1:?Usage: bash $0 <method> <profile> <target_fn> <lengthscale> <runs>}
+profile=${2:?Usage: bash $0 <method> <profile> <target_fn> <lengthscale> <runs>}
+target_fn=${3:?Usage: bash $0 <method> <profile> <target_fn> <lengthscale> <runs>}
+lengthscale=${4:?Usage: bash $0 <method> <profile> <target_fn> <lengthscale> <runs>}
+runs=${5:?Usage: bash $0 <method> <profile> <target_fn> <lengthscale> <runs>}
 
 mkdir -p logs/
 
 sbatch --job-name="${method}_${target_fn}_${lengthscale}" <<EOF
 #!/usr/bin/env bash
-#SBATCH --output=logs/${target_fn}_${lengthscale}_${method}_%A/%a.out
+#SBATCH --output=logs/${target_fn}_${lengthscale}_${method}_${profile}_%A/%a.out
 #SBATCH --array=0-$((runs - 1))
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
@@ -19,6 +20,7 @@ sbatch --job-name="${method}_${target_fn}_${lengthscale}" <<EOF
 
 PYTHONUNBUFFERED=1  uv run run.py \
     --method=$method \
+    --profile=$profile \
     --target_fn=$target_fn \
     --lengthscale=$lengthscale \
     --seed=\$SLURM_ARRAY_TASK_ID \
