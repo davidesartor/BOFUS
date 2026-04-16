@@ -1,4 +1,4 @@
-from typing import Callable, Literal, NamedTuple, Protocol, Self
+from typing import Callable, Any
 from jaxtyping import Array, Float, Scalar
 
 
@@ -14,33 +14,51 @@ EPS = float(jnp.sqrt(jnp.finfo(float).eps))
 
 
 def optimize_lhs_candidates(
-    acquisition_loss: Callable[[Float[Array, "d"]], Scalar],
+    acquisition_loss: Callable,
     candidates: Float[Array, "n d"],
-    max_restarts: int,
+    extra_args: list = [],
+    max_restarts: int = 0,
     optimizer_options: dict = dict(maxiter=100, ftol=EPS, gtol=0.0),
-) -> Float[Array, "d"]:
+) -> tuple[Float[Array, "d"], list]:
     # only keep the best initial candidates
+    extra_args = extra_args or [None] * len(candidates)
     loss_fn = jax.jit(jax.value_and_grad(acquisition_loss))
-    losses = np.array([loss_fn(candidate)[0] for candidate in candidates])
+    losses = [
+        loss_fn(c)[0] if args is None else loss_fn(c, args)[0]
+        for c, args in zip(candidates, extra_args)
+    ]
     candidates = candidates[np.argsort(losses)[:max_restarts]]
 
     # optimize each initial guesses with L-BFGS-B
     results = [
-        sp.optimize.minimize(
-            fun=loss_fn,
-            x0=candidate,
-            jac=True,
-            method="L-BFGS-B",
-            bounds=[(0.0, 1.0)] * len(candidate),
-            options=optimizer_options,
+        (
+            sp.optimize.minimize(
+                fun=loss_fn,
+                x0=c,
+                jac=True,
+                method="L-BFGS-B",
+                bounds=[(0.0, 1.0)] * len(c),
+                options=optimizer_options,
+            )
+            if args is None
+            else sp.optimize.minimize(
+                fun=loss_fn,
+                x0=c,
+                args=args,
+                jac=True,
+                method="L-BFGS-B",
+                bounds=[(0.0, 1.0)] * len(c),
+                options=optimizer_options,
+            )
         )
-        for candidate in candidates
+        for c, args in zip(candidates, extra_args)
     ]
 
     # sort results and return the best one
     losses = jnp.array([result.fun for result in results])
     best_candidate = results[jnp.argmin(losses)].x
-    return best_candidate
+    best_args = extra_args[jnp.argmin(losses)]
+    return best_candidate, best_args
 
 
 def log_expected_improvement(mu: Scalar, sigma: Scalar, y_best: Scalar) -> Scalar:
@@ -64,7 +82,3 @@ def log_expected_improvement(mu: Scalar, sigma: Scalar, y_best: Scalar) -> Scala
 
 def upper_confidence_bound(mu: Scalar, sigma: Scalar, beta: Scalar) -> Scalar:
     return -mu + jnp.sqrt(beta) * sigma
-
-
-# endregion
-################################################################################

@@ -5,25 +5,14 @@ description = "Baysian Optimization on Function Spaces"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "box2d>=2.3.10",
-    "einops>=0.8.2",
     "equinox>=0.13.6",
-    "flax>=0.12.6",
-    "gym>=0.26.2",
     "gymnasium>=1.2.3",
-    "ipykernel>=7.2.0",
-    "jax>=0.9.1",
+    "jax>=0.9.2",
     "jaxtyping>=0.3.9",
-    "jsonargparse>=4.47.0",
     "matplotlib>=3.10.8",
-    "moviepy>=2.2.1",
-    "nbformat>=5.10.4",
-    "numpy>=2.4.3",
+    "numpy>=2.4.4",
     "optax>=0.2.8",
-    "pandas>=3.0.1",
-    "pygame>=2.6.1",
     "scipy>=1.17.1",
-    "torch>=2.11.0",
     "torchvision>=0.26.0",
     "tqdm>=4.67.3",
 ]

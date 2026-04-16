@@ -1,9 +1,44 @@
-from typing import Literal, Protocol, Self
+from typing import Literal, Protocol
 from jaxtyping import Array, Float, Scalar
 
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
+
+
+################################################################################
+# region Kernel Profiles
+
+
+class Profile(Protocol):
+    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]: ...
+
+
+class SquaredExponential(Profile):
+    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]:
+        k = jnp.exp(-0.5 * d**2)
+        return k
+
+
+class Matern(Profile):
+    def __init__(self, nu: float):
+        self.nu = nu
+
+    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]:
+        # TODO: add support for general nu
+        if self.nu == 1 / 2:
+            k = jnp.exp(-d)
+        elif self.nu == 3 / 2:
+            k = (1 + jnp.sqrt(3) * d) * jnp.exp(-jnp.sqrt(3) * d)
+        elif self.nu == 5 / 2:
+            k = (1 + jnp.sqrt(5) * d + 5 / 3 * d**2) * jnp.exp(-jnp.sqrt(5) * d)
+        else:
+            raise ValueError(f"Unsupported nu={self.nu}")
+        return k
+
+
+# endregion
+################################################################################
 
 
 ################################################################################
@@ -85,41 +120,6 @@ class Mahalanobis(Metric):
         dist = jax.vmap(dist, in_axes=(None, 0))  # vectorize over x2
         dist = jax.vmap(dist, in_axes=(0, None))  # vectorize over x1
         return dist(x1, x2)
-
-
-# endregion
-################################################################################
-
-
-################################################################################
-# region Kernel Profiles
-
-
-class Profile(Protocol):
-    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]: ...
-
-
-class SquaredExponential(Profile):
-    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]:
-        k = jnp.exp(-0.5 * d**2)
-        return k
-
-
-class Matern(Profile):
-    def __init__(self, nu: float):
-        self.nu = nu
-
-    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]:
-        # TODO: add support for general nu
-        if self.nu == 1 / 2:
-            k = jnp.exp(-d)
-        elif self.nu == 3 / 2:
-            k = (1 + jnp.sqrt(3) * d) * jnp.exp(-jnp.sqrt(3) * d)
-        elif self.nu == 5 / 2:
-            k = (1 + jnp.sqrt(5) * d + 5 / 3 * d**2) * jnp.exp(-jnp.sqrt(5) * d)
-        else:
-            raise ValueError(f"Unsupported nu={self.nu}")
-        return k
 
 
 # endregion

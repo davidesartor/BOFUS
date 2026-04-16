@@ -1,21 +1,17 @@
-from typing import Literal, NamedTuple, Protocol, Self, Callable
+from typing import NamedTuple, Self
 from jaxtyping import Array, Float, Scalar
 
 import jax
 import jax.numpy as jnp
 import jax.scipy as jsp
-import jax.random as jr
 import equinox as eqx
-
-import numpy as np
 import scipy as sp
+
+from . import kernels, rkhs
 
 
 jax.config.update("jax_enable_x64", True)
 EPS = float(jnp.sqrt(jnp.finfo(float).eps))
-
-################################################################################
-# region Miscellaneous
 
 
 class Module(eqx.Module):
@@ -29,6 +25,7 @@ class Gaussian(NamedTuple):
     cov: Float[Array, "n n"]
 
 
+@jax.jit
 def gp_posterior(
     Kxx: Float[Array, "m m"],
     Kox: Float[Array, "n m"],
@@ -71,138 +68,10 @@ def loglikelihood(
     return (loglik, b, nu)
 
 
-# endregion
-################################################################################
-
-
-################################################################################
-# region Metrics
-
-
-class Metric(Protocol):
-    def __call__(
-        self,
-        rho: Float[Array, "..."],
-        x1: Float[Array, "n d"],
-        x2: Float[Array, "m d"],
-    ) -> Float[Array, "n m"]: ...
-
-
-class Minkowski(Metric):
-    def __init__(self, p: int | Literal["inf", "-inf"]):
-        self.p = p
-
-    def __call__(
-        self,
-        rho: Float[Array, "#d"],
-        x1: Float[Array, "n d"],
-        x2: Float[Array, "m d"],
-    ) -> Float[Array, "n m"]:
-        # define the distance function for a single pair of points
-        def dist(a: Float[Array, "d"], b: Float[Array, "d"]) -> Scalar:
-            v = (a - b) / rho
-            # use lax.cond to avoid propagating NaNs in the gradients for v=0.0
-            return jax.lax.cond(
-                jnp.allclose(v, 0.0),
-                lambda: 0.0,
-                lambda: jax.numpy.linalg.norm(v, ord=self.p),
-            )
-
-        # vectorize the distance function over pairs
-        dist = jax.vmap(dist, in_axes=(None, 0))  # vectorize over x2
-        dist = jax.vmap(dist, in_axes=(0, None))  # vectorize over x1
-        return dist(x1, x2)
-
-
-class Euclidean(Minkowski):
-    def __init__(self):
-        super().__init__(p=2)
-
-
-class Manhattan(Minkowski):
-    def __init__(self):
-        super().__init__(p=1)
-
-
-class Chebyshev(Minkowski):
-    def __init__(self):
-        super().__init__(p="inf")
-
-
-class Mahalanobis(Metric):
-    def __init__(self, p: int | Literal["inf", "-inf"] = 2):
-        self.p = p
-
-    def __call__(
-        self,
-        rho: Float[Array, "d d"],
-        x1: Float[Array, "n d"],
-        x2: Float[Array, "m d"],
-    ) -> Float[Array, "n m"]:
-        # define the distance function for a single pair of points
-        def dist(a: Float[Array, "d"], b: Float[Array, "d"]) -> Scalar:
-            cov_sqrt, is_lower = jsp.linalg.cho_factor(rho)
-            v = jsp.linalg.solve_triangular(cov_sqrt, a - b, lower=is_lower)
-            # use lax.cond to avoid propagating NaNs in the gradients for v=0.0
-            return jax.lax.cond(
-                jnp.allclose(v, 0.0),
-                lambda: 0.0,
-                lambda: jax.numpy.linalg.norm(v, ord=self.p),
-            )
-
-        # vectorize the distance function over pairs
-        dist = jax.vmap(dist, in_axes=(None, 0))  # vectorize over x2
-        dist = jax.vmap(dist, in_axes=(0, None))  # vectorize over x1
-        return dist(x1, x2)
-
-
-# endregion
-################################################################################
-
-
-################################################################################
-# region Kernel Profiles
-
-
-class Profile(Protocol):
-    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]: ...
-
-
-class SquaredExponential(Profile):
-    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]:
-        k = jnp.exp(-0.5 * d**2)
-        return k
-
-
-class Matern(Profile):
-    def __init__(self, nu: float):
-        self.nu = nu
-
-    def __call__(self, d: Float[Array, "..."]) -> Float[Array, "..."]:
-        # TODO: add support for general nu
-        if self.nu == 1 / 2:
-            k = jnp.exp(-d)
-        elif self.nu == 3 / 2:
-            k = (1 + jnp.sqrt(3) * d) * jnp.exp(-jnp.sqrt(3) * d)
-        elif self.nu == 5 / 2:
-            k = (1 + jnp.sqrt(5) * d + 5 / 3 * d**2) * jnp.exp(-jnp.sqrt(5) * d)
-        else:
-            raise ValueError(f"Unsupported nu={self.nu}")
-        return k
-
-
-# endregion
-################################################################################
-
-
-################################################################################
-# region Gaussian Process with vector inputs
-
-
 class GaussianProcess(Module):
     # kernel definition
-    metric: Metric = Euclidean()
-    profile: Profile = SquaredExponential()
+    metric: kernels.Metric = kernels.Euclidean()
+    profile: kernels.Profile = kernels.SquaredExponential()
 
     # model parameters
     rho: Float[Array, "d"] = eqx.field(default=None)
@@ -291,40 +160,10 @@ class GaussianProcess(Module):
         )
 
 
-# endregion
-################################################################################
-
-################################################################################
-# region Gaussian Process with functional inputs
-
-
-class RKHS(NamedTuple):
-    metric: Metric
-    profile: Profile
-    rho: Float[Array, "d"]
-
-    def __call__(
-        self,
-        xs1: Float[Array, "n d"],
-        xs2: Float[Array, "m d"],
-    ) -> Float[Array, "n m"]:
-        return self.profile(self.metric(self.rho, xs1, xs2))
-
-
-class RKHSFunction(NamedTuple):
-    kernel: RKHS
-    x: Float[Array, "k d"]  # basis points
-    a: Float[Array, "k"]  # coefficients
-
-    @eqx.filter_jit
-    def __call__(self, t: Float[Array, "d"]) -> Scalar:
-        Ktx = self.kernel(t[None, :], self.x)
-        return (Ktx @ self.a).squeeze()
-
 
 class FunctionalGaussianProcess(Module):
     # kernel definition
-    profile: Profile = SquaredExponential()
+    profile: kernels.Profile = kernels.SquaredExponential()
 
     # model parameters
     rho: Scalar = eqx.field(default=None)
@@ -333,14 +172,14 @@ class FunctionalGaussianProcess(Module):
     b: Scalar = eqx.field(default=None)
 
     # observed data
-    observed_fs: list[RKHSFunction] = eqx.field(default=None)
+    observed_fs: list[rkhs.Function] = eqx.field(default=None)
     observed_ys: Float[Array, "n"] = eqx.field(default=None)
 
     # cached covariance matrix of the observed ys
     Koo: Float[Array, "n n"] = eqx.field(default=None)
 
     @eqx.filter_jit
-    def metric(self, f1: RKHSFunction, f2: RKHSFunction) -> Scalar:
+    def metric(self, f1: rkhs.Function, f2: rkhs.Function) -> Scalar:
         K11 = f1.kernel(f1.x, f1.x)
         K12 = f1.kernel(f1.x, f2.x)
         K22 = f2.kernel(f2.x, f2.x)
@@ -351,14 +190,14 @@ class FunctionalGaussianProcess(Module):
     def kernel(
         self,
         rho: Scalar,
-        fs1: list[RKHSFunction],
-        fs2: list[RKHSFunction],
+        fs1: list[rkhs.Function],
+        fs2: list[rkhs.Function],
     ) -> Float[Array, "m n"]:
         d = jnp.array([[self.metric(f1, f2) for f2 in fs2] for f1 in fs1])
         return self.profile(d / jnp.sqrt(rho))
 
     @eqx.filter_jit
-    def predict(self, fs: list[RKHSFunction]) -> Gaussian:
+    def predict(self, fs: list[rkhs.Function]) -> Gaussian:
         # compute covariance matrices
         Kxx = self.nu * self.kernel(self.rho, fs, fs)
         Kox = self.nu * self.kernel(self.rho, self.observed_fs, fs)
@@ -367,7 +206,7 @@ class FunctionalGaussianProcess(Module):
 
     def fit(
         self,
-        fs: list[RKHSFunction],
+        fs: list[rkhs.Function],
         ys: Float[Array, "n"],
         *,
         warmstart: bool = False,
@@ -423,6 +262,3 @@ class FunctionalGaussianProcess(Module):
             rho=rho, g=g, nu=nu, b=b, Koo=Koo, observed_fs=fs, observed_ys=ys
         )
 
-
-# endregion
-################################################################################
