@@ -16,18 +16,14 @@ class TestFunction(Protocol):
 
 class Ridge(TestFunction):
     def __init__(
-        self,
-        profile: virtual_library.TestFunction,
-        d: int = 1,
-        seed: int = 0,
-        basis_points: int = 10,
+        self, profile: virtual_library.TestFunction, d: int, seed: int = 0
     ):
         self.d = d
         self.profile = profile
         k1, k2, k3 = jr.split(jr.key(seed), 3)
         # sample d directions g = sum a * k(x, .)
-        self.a = jr.uniform(k1, (d, basis_points), minval=-1.0, maxval=1.0)
-        self.x = jr.uniform(k2, (d, basis_points, d), minval=0.0, maxval=1.0)
+        self.a = jr.uniform(k1, (d, d), minval=-1.0, maxval=1.0)
+        self.x = jr.uniform(k2, (d, d, d), minval=0.0, maxval=1.0)
         # sample d biases b
         self.b = jr.uniform(k3, (d,), minval=-1.0, maxval=1.0)
 
