@@ -22,7 +22,7 @@ class MNIST(TestFunction):
     def __init__(
         self,
         seed: int = 0,
-        n_runs: int = 4,
+        n_runs: int = 1,
         batch_size: int = 100,
         width_size: int = 256,
         depth: int = 2,
@@ -40,28 +40,25 @@ class MNIST(TestFunction):
         self.n_runs = n_runs
 
         # load mnist dataset and preprocess (scale input to [0, 1])
-        train_dataset = torchvision.datasets.MNIST(
-            root="./data", train=True, download=True
-        )
-        test_dataset = torchvision.datasets.MNIST(
-            root="./data", train=False, download=True
-        )
+        train_dataset = torchvision.datasets.MNIST(root="./data", train=True)
+        test_dataset = torchvision.datasets.MNIST(root="./data", train=False)
         self.train_data: Float[Array, "n 28*28"] = jnp.array(train_dataset.data) / 255.0
         self.train_labels: Int[Array, "n"] = jnp.array(train_dataset.targets)
         self.test_data: Float[Array, "m 28*28"] = jnp.array(test_dataset.data) / 255.0
         self.test_labels: Int[Array, "m"] = jnp.array(test_dataset.targets)
 
     def __call__(self, f: Callable[[Float[Array, "1"]], Scalar]) -> Scalar:
-        @jax.jit
-        def run_single(key):
-            key_init, key_fit = jr.split(key)
-            network = self.initialize(key_init, f)
-            network, train_losses = self.fit(network, key_fit)
-            test_loss, test_accuracy = self.test(network)
-            return test_accuracy
+        # vectorize initialization, fitting, and testing across runs
+        vectorized_init = eqx.filter_vmap(lambda k: self.initialize(k, f))
+        vectorized_fit = eqx.filter_jit(eqx.filter_vmap(self.fit))
+        vectorized_test = eqx.filter_jit(eqx.filter_vmap(self.test))
 
-        accuracy = [run_single(key) for key in jr.split(jr.key(self.seed), self.n_runs)]
-        return 1 - jnp.mean(jnp.array(accuracy))
+        # run simulations in parallel across runs
+        key_init, key_fit = jr.split(jr.key(self.seed))
+        networks = vectorized_init(jr.split(key_init, self.n_runs))
+        network, train_losses = vectorized_fit(networks, jr.split(key_fit, self.n_runs))
+        test_loss, test_acc = vectorized_test(network)
+        return 1 - test_acc.mean()
 
     def initialize(self, key: Key, f: Callable[[Float[Array, "1"]], Scalar]):
         activation = lambda x: f((x[None] + 3.0) / 6.0) + jax.nn.celu(x)

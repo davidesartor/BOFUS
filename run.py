@@ -7,7 +7,6 @@ import numpy as np
 
 import argparse
 import time
-import pickle
 import os
 
 from src import gp, kernels, acquisition, rkhs, targets
@@ -109,7 +108,7 @@ def run_wycoff(
 def run_vellanky(
     seed: int,
     target_fn: targets.TestFunction,
-    kernel: rkhs.RKHS,  # ignored by Vellanky's method
+    kernel: rkhs.RKHS,  # ignored, only used to assert 1D input space
     surrogate_model: gp.GaussianProcess,
     # simulation parameters
     initial_acquisitions: int,
@@ -119,6 +118,7 @@ def run_vellanky(
     acquisition_raw_samples: int,
     acquisition_max_restarts: int,
 ):
+    assert kernel.d == 1, "Vellanky's method only supports 1D input spaces"
     # initialize run rng and timers
     rng = np.random.default_rng(seed=seed)
     surrogate_fit_time = 0.0
@@ -548,7 +548,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--method", choices=["wycoff", "vellanky", "vien", "kundu", "shilton"]
     )
-    parser.add_argument("--target_fn", choices=["mnist", "sinc"])
+    parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum"])
     parser.add_argument("--lengthscale", type=float, required=True)
     parser.add_argument("--seed", type=int, required=True)
     # simulation parameters
@@ -564,6 +564,7 @@ if __name__ == "__main__":
     target_fn = {
         "mnist": targets.MNIST,
         "sinc": targets.SincProjection,
+        "pendulum": targets.Pendulum,
     }[args.target_fn]()
     kernel = rkhs.RKHS(
         metric=kernels.Euclidean(),
@@ -595,7 +596,8 @@ if __name__ == "__main__":
     )
 
     # save results
-    save_dir = f"results/{args.method}/{args.target_fn}/"
+    save_dir = f"results/{args.method}/{args.target_fn}/lengthscale_{args.lengthscale}/"
     os.makedirs(save_dir, exist_ok=True)
-    save_path = f"{save_dir}/lengthscale_{args.lengthscale}_seed_{args.seed}.pkl"
-    pickle.dump(results, open(save_path, "wb"))
+    save_path = f"{save_dir}/seed_{args.seed}"
+    np.savez_compressed(save_path, **results)
+    print(f"Results saved to {save_path}.npz")

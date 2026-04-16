@@ -9,15 +9,15 @@ mkdir -p logs/
 
 sbatch --job-name="${method}_${target_fn}_${lengthscale}" <<EOF
 #!/usr/bin/env bash
-#SBATCH --output=logs/%A_${method}_${target_fn}_${lengthscale}/%a.out
+#SBATCH --output=logs/${target_fn}_${lengthscale}_${method}_%A/%a.out
 #SBATCH --array=0-$((runs - 1))
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=8G
+#SBATCH --mem=64G
 #SBATCH --time=08:00:00
 #SBATCH --partition=cpu
 
-uv run run.py \
+PYTHONUNBUFFERED=1  uv run run.py \
     --method=$method \
     --target_fn=$target_fn \
     --lengthscale=$lengthscale \
