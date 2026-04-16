@@ -81,6 +81,7 @@ class BernsteinPolynomial(NamedTuple):
     @eqx.filter_jit
     def __call__(self, x: Float[Array, "... 1"]) -> Float[Array, "..."]:
         n = self.degree
+        x = jax.nn.sigmoid(4 * (x - 0.5))  # soft squish to [0,1]
         g = jsp.stats.binom.pmf(jnp.arange(n + 1), n, x)
         return jnp.sum(self.c * g, axis=-1)
 
