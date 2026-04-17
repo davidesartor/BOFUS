@@ -22,9 +22,9 @@ class MNIST(TestFunction):
     def __init__(
         self,
         seed: int = 0,
-        n_runs: int = 1,
+        n_runs: int = 5,
         batch_size: int = 100,
-        width_size: int = 128,
+        width_size: int = 256,
         depth: int = 2,
         lr: float = 1e-3,
         epochs: int = 5,
@@ -61,7 +61,7 @@ class MNIST(TestFunction):
         return 1 - jnp.array(accuracy).mean()
 
     def initialize(self, key: Key, f: Callable[[Float[Array, "1"]], Scalar]):
-        activation = lambda x: f((x[None] + 1.0) / 2.0) + jax.nn.celu(x)
+        activation = lambda x: f((x[None] + 1.0) / 2.0) + jax.nn.relu(x)
         return eqx.nn.MLP(
             in_size=28 * 28,
             out_size=10,

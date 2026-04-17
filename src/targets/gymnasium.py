@@ -16,7 +16,7 @@ class Pendulum(TestFunction):
 
     def __init__(
         self,
-        n_rollouts: int = 1,
+        n_rollouts: int = 50,
         max_episode_length: int = 400,
         discount_factor: float = 0.99,
     ):

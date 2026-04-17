@@ -111,24 +111,25 @@ def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[
 
 
 if __name__ == "__main__":
-    # save_dir = f"results/wycoff_matern32/mnist/lengthscale_0.3/"
-    # import jax
-    # import jax.numpy as jnp
-    # results = [
-    #     np.load(os.path.join(save_dir, f), allow_pickle=True)
-    #     for f in os.listdir(save_dir)
-    #     if f.endswith(".pkl")
-    # ]
-    # fs = [r["observation_locations"] for r in results]
-    # ys = [r["observation_values"] for r in results]
-    # for f, y in zip(fs, ys):
-    #     f = f[np.argmin(y)]
-    #     a = lambda x: f((x[None] + 3.0) / 6.0) + jax.nn.celu(x)
-    #     x = np.linspace(-10.0, 10.0, 100)
-    #     plt.plot(x, jax.vmap(a)(x))
-    #     break
-    # plt.savefig("plots/mnist_surrogate.pdf", bbox_inches="tight")
-    # assert False
+    import jax
+    for method in ["wycoff", "kundu", "vien", "shilton", "vellanky"]:
+        save_dir = f"results/{method}_matern32/mnist/lengthscale_0.1/"
+        results = [
+            np.load(os.path.join(save_dir, f), allow_pickle=True)
+            for f in os.listdir(save_dir)
+            if f.endswith(".pkl")
+        ]
+        fs = [r["observation_locations"] for r in results]
+        ys = [r["observation_values"] for r in results]
+        fs, ys = zip(*[(f[np.argmin(y)], y.min()) for f, y in zip(fs, ys)])
+        f = fs[np.argmin(ys)]
+        a = lambda x: f((x[None] + 1.0) / 2.0) + jax.nn.relu(x)
+        x = np.linspace(-5.0, 5.0, 100)
+        plt.plot(x, jax.vmap(a)(x), label=method)
+    plt.legend()
+    plt.grid()
+    plt.savefig("plots/mnist_surrogate.pdf", bbox_inches="tight")
+    assert False
 
     methods = ["wycoff", "wycoff_gp", "kundu", "vien", "shilton", "vellanky"]
     profiles = ["rbf", "matern52", "matern32"]
