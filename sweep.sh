@@ -2,7 +2,7 @@
 runs=${1:?Usage: bash $0 <runs> <target_fn>}
 target_fn=${2:?Usage: bash $0 <runs> <target_fn>}
 
-methods=(wycoff vellanky kundu vien shilton)
+methods=(wycoff wycoff_gp vellanky kundu vien shilton)
 profiles=(rbf matern32 matern52)
 lenghtscales=(0.3 0.1 0.03)
 

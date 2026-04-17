@@ -96,6 +96,110 @@ def run_wycoff(
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
             print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
+            jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
+
+    return dict(
+        observation_locations=fs,
+        observation_values=ys,
+        surrogate_fit_time=surrogate_fit_time,
+        acquisition_time=acquisition_time,
+        target_evaluation_time=target_evaluation_time,
+    )
+
+
+def run_wycoff_gp(
+    seed: int,
+    target_fn: targets.TestFunction,
+    kernel: rkhs.RKHS,
+    surrogate_model: gp.FunctionalGaussianProcess,
+    # simulation parameters
+    initial_acquisitions: int,
+    minimum_k: int,  # number of basis points
+    maximum_k: int,  # number of basis points
+    acquisitions_each_k: int,
+    acquisition_raw_samples: int,
+    acquisition_max_restarts: int,
+):
+    def sample_from_gp_prior(k: int):
+        xs = grid_sampler.random(n=k)
+        mean = jnp.zeros(len(xs))
+        cov = kernel(xs, xs)
+        ys = rng.multivariate_normal(mean, cov)
+        return xs, ys
+
+    # initialize run rng and timers
+    rng = np.random.default_rng(seed=seed)
+    surrogate_fit_time = 0.0
+    acquisition_time = 0.0
+    target_evaluation_time = 0.0
+
+    print("Sampling initial acquisition...")
+    timer = time.time()
+    grid_sampler = sp.stats.qmc.LatinHypercube(d=kernel.d, rng=rng)
+    xy_grids = [sample_from_gp_prior(maximum_k) for _ in range(initial_acquisitions)]
+    fs = [rkhs.Function.from_xy(kernel, x=x, y=y) for x, y in xy_grids]
+    acquisition_time += time.time() - timer
+    print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
+
+    print("Evaluating target function at initial acquisition points...")
+    timer = time.time()
+    ys = jnp.array([target_fn(f) for f in fs])
+    target_evaluation_time += time.time() - timer
+    print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
+
+    print("Fitting surrogate model on initial acquisition points...")
+    timer = time.time()
+    surrogate_model = surrogate_model.fit(fs, ys)
+    surrogate_fit_time += time.time() - timer
+    print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
+
+    # sequential acquisition loop
+    for k in range(minimum_k, maximum_k + 1):
+        for i in range(acquisitions_each_k):
+            # define acquisition loss function
+            def acquisition_loss(p: Float[Array, "k * (d+1)"]) -> Scalar:
+                f = rkhs.Function.from_array(kernel, p.reshape(k, kernel.d + 1))
+                mu, cov = surrogate_model.predict([f])
+                return -acquisition.log_expected_improvement(
+                    mu=mu.squeeze(),
+                    sigma=cov.squeeze() ** 0.5,
+                    y_best=surrogate_model.observed_ys.min(),
+                )
+
+            print(f"Optimizing acquisition function...")
+            timer = time.time()
+            xy_grids = [sample_from_gp_prior(k) for _ in range(acquisition_raw_samples)]
+            ps = [
+                jnp.concat([x, jax.nn.sigmoid(4 * (y[:, None] - 0.5))], axis=-1)
+                for x, y in xy_grids
+            ]
+            p, _ = acquisition.optimize_lhs_candidates(
+                acquisition_loss=acquisition_loss,
+                candidates=jnp.array(ps).reshape(-1, k * (kernel.d + 1)),
+                max_restarts=acquisition_max_restarts,
+            )
+            p = p.reshape(k, kernel.d + 1)
+            acquisition_time += time.time() - timer
+            print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
+
+            print("Evaluating target function at new acquisition point...")
+            timer = time.time()
+            x, y = p[:, :-1], p[:, -1]
+            f = rkhs.Function.from_xy(kernel, x=x, y=y)
+            y = target_fn(f)
+            target_evaluation_time += time.time() - timer
+            print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
+
+            print("Updating surrogate model with new acquisition point...")
+            timer = time.time()
+            fs = fs + [f]
+            ys = jnp.concatenate([ys, y[None]])
+            surrogate_model = surrogate_model.fit(fs, ys)
+            surrogate_fit_time += time.time() - timer
+            print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
+
+            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
+            jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
 
     return dict(
         observation_locations=fs,
@@ -193,6 +297,7 @@ def run_vellanky(
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
             print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
+            jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
 
     return dict(
         observation_locations=fs,
@@ -302,6 +407,7 @@ def run_kundu(
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
             print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
+            jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
 
     return dict(
         observation_locations=fs,
@@ -429,6 +535,7 @@ def run_vien(
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
             print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
+            jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
 
     return dict(
         observation_locations=fs,
@@ -534,6 +641,7 @@ def run_shilton(
             print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
             print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
+            jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
 
     return dict(
         observation_locations=fs,
@@ -547,14 +655,13 @@ def run_shilton(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--method", choices=["wycoff", "vellanky", "vien", "kundu", "shilton"]
+        "--method",
+        choices=["wycoff", "wycoff_gp", "vellanky", "vien", "kundu", "shilton"],
     )
     parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum", "ackley"])
     parser.add_argument("--lengthscale", type=float, required=True)
     parser.add_argument(
-        "--profile",
-        choices=["rbf", "matern12", "matern32", "matern52"],
-        default="rbf",
+        "--profile", choices=["rbf", "matern12", "matern32", "matern52"]
     )
     parser.add_argument("--seed", type=int, required=True)
     # simulation parameters
@@ -588,6 +695,7 @@ if __name__ == "__main__":
     }[args.profile]
     run_simulation_fn, surrogate_model = {
         "wycoff": (run_wycoff, gp.FunctionalGaussianProcess(profile=profile)),
+        "wycoff_gp": (run_wycoff_gp, gp.FunctionalGaussianProcess(profile=profile)),
         "vellanky": (run_vellanky, gp.GaussianProcess(profile=profile)),
         "kundu": (run_kundu, gp.FunctionalGaussianProcess(profile=profile)),
         "vien": (run_vien, gp.FunctionalGaussianProcess(profile=profile)),

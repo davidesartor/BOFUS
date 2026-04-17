@@ -13,9 +13,9 @@ sbatch --job-name="${method}_${target_fn}_${lengthscale}" <<EOF
 #SBATCH --output=logs/${target_fn}_${lengthscale}_${method}_${profile}_%A/%a.out
 #SBATCH --array=0-$((runs - 1))
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=60G
-#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --time=08:00:00
 #SBATCH --partition=cpu
 
 PYTHONUNBUFFERED=1  uv run run.py \
