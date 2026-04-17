@@ -45,3 +45,4 @@ class SincProjection:
 
 from .neuralnetworks import MNIST
 from .gymnasium import Pendulum
+from .pinwheel import PinWheel

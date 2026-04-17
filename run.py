@@ -137,7 +137,7 @@ def run_wycoff_gp(
     timer = time.time()
     grid_sampler = sp.stats.qmc.LatinHypercube(d=kernel.d, rng=rng)
     xy_grids = [sample_from_gp_prior(maximum_k) for _ in range(initial_acquisitions)]
-    fs = [rkhs.Function.from_xy(kernel, x=x, y=y) for x, y in xy_grids]
+    fs = [rkhs.Function.from_xy(kernel, x=x, y=y) for x, y in xy_grids] # type: ignore
     acquisition_time += time.time() - timer
     print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
@@ -658,7 +658,7 @@ if __name__ == "__main__":
         "--method",
         choices=["wycoff", "wycoff_gp", "vellanky", "vien", "kundu", "shilton"],
     )
-    parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum", "ackley"])
+    parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum", "ackley", "pinwheel"])
     parser.add_argument("--lengthscale", type=float, required=True)
     parser.add_argument(
         "--profile", choices=["rbf", "matern12", "matern32", "matern52"]
@@ -679,6 +679,7 @@ if __name__ == "__main__":
         "sinc": targets.SincProjection,
         "pendulum": targets.Pendulum,
         "ackley": lambda: targets.Ridge(targets.virtual_library.Ackley(), d=2),
+        "pinwheel": targets.PinWheel,
     }[args.target_fn]()
     kernel = rkhs.RKHS(
         metric=kernels.Euclidean(),
