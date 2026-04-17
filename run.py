@@ -658,7 +658,7 @@ if __name__ == "__main__":
         "--method",
         choices=["wycoff", "wycoff_gp", "vellanky", "vien", "kundu", "shilton"],
     )
-    parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum", "ackley", "pinwheel"])
+    parser.add_argument("--target_fn", choices=["mnist", "sinc", "pendulum", "ackley", "hartmann", "pinwheel"])
     parser.add_argument("--lengthscale", type=float, required=True)
     parser.add_argument(
         "--profile", choices=["rbf", "matern12", "matern32", "matern52"]
@@ -679,6 +679,7 @@ if __name__ == "__main__":
         "sinc": targets.SincProjection,
         "pendulum": targets.Pendulum,
         "ackley": lambda: targets.Ridge(targets.virtual_library.Ackley(), d=2),
+        "hartmann": lambda: targets.Ridge(targets.virtual_library.Hartmann3(), d=3),
         "pinwheel": targets.PinWheel,
     }[args.target_fn]()
     kernel = rkhs.RKHS(
