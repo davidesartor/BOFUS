@@ -24,6 +24,8 @@ def plot_times(ax, times: np.ndarray, position: int):
 
 
 def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[str]):
+    if target_fn in ["pendulum", "ackley", "hartmann"]:
+        methods = [m for m in methods if m != "vellanky"]  # vellanky only supports 1D targets
     colors = plt.cm.tab10.colors
     linestyles = ["-", "--", ":", "-."]
 
@@ -39,7 +41,7 @@ def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[
     for i, (method, color) in enumerate(zip(methods, colors)):
         for profile, linestyle in zip(profiles, linestyles):
             save_dir = (
-                f"results/{method}_{profile}/{target_fn}/lengthscale_{lengthscale}/"
+                f"results/{method}/{profile}/{target_fn}/lengthscale_{lengthscale}/"
             )
             try:
                 results = [
@@ -47,14 +49,12 @@ def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[
                     for f in os.listdir(save_dir)
                     if f.endswith(".pkl")
                 ]
-                assert len(results) == 16, len(results)
+                #assert len(results) == 10, len(results)
                 ys = np.array([r["observation_values"] for r in results])
                 t_fit = np.array([r["surrogate_fit_time"] for r in results])
                 t_acq = np.array([r["acquisition_time"] for r in results])
 
             except Exception as e:
-                if method == "vellanky" and target_fn in ["pendulum", "ackley"]:
-                    continue  # skip missing results for vellanky on pendulum and ackley
                 print(f"Error loading {method} {target_fn} l={lengthscale}: {e}")
                 continue
 
@@ -67,7 +67,6 @@ def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[
         title="Target function",
         ylabel="Target",
         xlabel="Acquisitions",
-        yscale="log",
     )
     ax_ys.grid(True)
 
@@ -111,6 +110,16 @@ def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[
 
 
 if __name__ == "__main__":
+    methods = ["wycoff", "wycoff_gp", "kundu", "vien", "shilton", "vellanky"]
+    profiles = ["rbf", "matern52", "matern32"]
+
+    for lenghtscale in [0.3, 0.1, 0.03]:
+        for target_fn in ["sinc", "ackley", "pendulum", "mnist"]:
+            print(f"Plotting results for {target_fn} (lengthscale {lenghtscale})")
+            plot(target_fn, lenghtscale, methods, profiles)
+            print(f"Done!\n")
+
+    assert False, "Done plotting all results!"  # stop here 
     import jax
     for method in ["wycoff", "kundu", "vien", "shilton", "vellanky"]:
         save_dir = f"results/{method}_matern32/mnist/lengthscale_0.1/"
@@ -130,12 +139,3 @@ if __name__ == "__main__":
     plt.grid()
     plt.savefig("plots/mnist_surrogate.pdf", bbox_inches="tight")
     assert False
-
-    methods = ["wycoff", "wycoff_gp", "kundu", "vien", "shilton", "vellanky"]
-    profiles = ["rbf", "matern52", "matern32"]
-
-    for lenghtscale in [0.3, 0.1, 0.03]:
-        for target_fn in ["sinc", "ackley", "pendulum", "mnist"]:
-            print(f"Plotting results for {target_fn} (lengthscale {lenghtscale})")
-            plot(target_fn, lenghtscale, methods, profiles)
-            print(f"Done!\n")
