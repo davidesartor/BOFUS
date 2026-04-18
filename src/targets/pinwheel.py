@@ -71,7 +71,7 @@ class PinWheel(TestFunction):
     def __call__(self, f: Callable[[Float[Array, "d"]], Scalar]) -> Scalar:
         q1 = lambda t: f(jnp.array([t/self.simulation_time]))
         sol, theta_final, omega_final = self.simulate(q1_ref=q1)
-        return 2 * (1 - jnp.cos(theta_final - self.target_angle))
+        return jnp.log(2 * (1 - jnp.cos(theta_final - self.target_angle)))
 
     def simulate(
         self,

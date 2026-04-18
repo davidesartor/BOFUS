@@ -27,7 +27,7 @@ class Pendulum(TestFunction):
 
     def __call__(self, f: Callable[[Float[Array, "2"]], Scalar]) -> Scalar:
         returns = [self.rollout(f, seed) for seed in range(self.n_rollouts)]
-        return -jnp.mean(jnp.array(returns))
+        return jnp.log(-jnp.mean(jnp.array(returns)))
 
     def rollout(self, f: Callable[[Float[Array, "2"]], Scalar], seed: int) -> float:
         obs, _ = self.env.reset(seed=seed)
