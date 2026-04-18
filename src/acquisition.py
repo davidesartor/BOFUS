@@ -22,7 +22,7 @@ def optimize_lhs_candidates(
 ) -> tuple[Float[Array, "d"], list]:
     # only keep the best initial candidates
     extra_args = extra_args or [None] * len(candidates)
-    loss_fn = jax.jit(jax.value_and_grad(acquisition_loss))
+    loss_fn = acquisition_loss
     losses = [
         loss_fn(c)[0] if args is None else loss_fn(c, args)[0]
         for c, args in zip(candidates, extra_args)

@@ -50,10 +50,10 @@ class Function(NamedTuple):
         y_range: tuple[float, float] = (-1.0, 1.0),
         eps: float = 0.01,
     ) -> Self:
-        x, a = p[:, :-1], p[:, -1]
+        x, y = p[:, :-1], p[:, -1]
         x = x * (x_range[1] - x_range[0]) + x_range[0]  # [0,1]->x_range
-        a = a * (y_range[1] - y_range[0]) + y_range[0]  # [0,1]->y_range
-        return cls.from_xy(rkhs, x, a, eps)
+        y = y * (y_range[1] - y_range[0]) + y_range[0]  # [0,1]->y_range
+        return cls.from_xy(rkhs, x, y, eps)
 
     @classmethod
     def from_xy(

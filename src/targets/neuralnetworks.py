@@ -24,7 +24,7 @@ class MNIST(TestFunction):
         seed: int = 0,
         n_runs: int = 5,
         batch_size: int = 100,
-        width_size: int = 256,
+        width_size: int = 128,
         depth: int = 2,
         lr: float = 1e-3,
         epochs: int = 5,
