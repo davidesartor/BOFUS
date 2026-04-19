@@ -40,7 +40,7 @@ class SincProjection:
     def __call__(self, f: Callable[[Float[Array, "d"]], Scalar]) -> Scalar:
         target = jnp.sinc(2 * jnp.pi * self.grid - jnp.pi).prod(axis=-1)
         pred = jax.vmap(f)(self.grid)
-        return jnp.log(jnp.mean(jnp.square(pred - target)))
+        return jnp.mean(jnp.square(pred - target))
 
 
 from .neuralnetworks import MNIST

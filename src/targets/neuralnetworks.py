@@ -58,10 +58,10 @@ class MNIST(TestFunction):
             network, train_losses = fit(network, key_fit)
             test_loss, test_accuracy = test(network)
             accuracy.append(test_accuracy)
-        return jnp.log(1 - jnp.array(accuracy).mean())
+        return 1 - jnp.array(accuracy).mean()
 
     def initialize(self, key: Key, f: Callable[[Float[Array, "1"]], Scalar]):
-        activation = lambda x: f((x[None] + 1.0) / 2.0) + jax.nn.relu(x)
+        activation = lambda x: f((x[None] + 3.0) / 6.0) + jax.nn.relu(x)
         return eqx.nn.MLP(
             in_size=28 * 28,
             out_size=10,

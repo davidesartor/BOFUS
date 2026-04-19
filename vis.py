@@ -22,7 +22,13 @@ def plot_ys(ax, ys: np.ndarray, style: dict):
     ax.fill_between(x, ll, ul, alpha=0.2, color=ax.lines[-1].get_color())
 
 
-def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[str], savepath: str):
+def plot(
+    target_fn: str,
+    lengthscale: float,
+    methods: list[str],
+    profiles: list[str],
+    savepath: str,
+):
     if target_fn in ["pendulum", "ackley", "hartmann"]:
         methods = [m for m in methods if m != "vellanky"]
     colors = plt.cm.tab10.colors
@@ -52,6 +58,7 @@ def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[
 
     ax_ys.set(title="Target function", ylabel="Target", xlabel="Acquisitions")
     ax_ys.grid(True)
+    ax_ys.yscale("log")
 
     method_handles = [
         mlines.Line2D([], [], color=colors[i], linewidth=2, label=method)
@@ -82,29 +89,34 @@ def plot(target_fn: str, lengthscale: float, methods: list[str], profiles: list[
 
 
 if __name__ == "__main__":
+    profiles = ["rbf", "matern52", "matern32", "matern12"]
+    targets = ["sinc", "ackley", "hartmann", "pendulum", "pinwheel", "mnist"]
+    lengthscales = [0.3, 0.1, 0.03]
+
     methods = ["wycoff", "kundu", "vien", "shilton", "vellanky"]
-    profiles = ["rbf", "matern52", "matern32"]
-    for lengthscale in [0.3, 0.1, 0.03]:
-        for target_fn in ["sinc", "ackley", "pendulum", "mnist"]:
+    for lengthscale in lengthscales:
+        for target_fn in targets:
             print(f"Plotting results for {target_fn} (lengthscale {lengthscale})")
             savepath = f"plots/{target_fn}/lengthscale_{lengthscale}.pdf"
             plot(target_fn, lengthscale, methods, profiles, savepath)
             print(f"Done!\n")
 
     methods = ["wycoff", "wycoff_no_natural_grad", "vien", "vien_no_natural_grad"]
-    profiles = ["rbf", "matern52", "matern32"]
-    for lengthscale in [0.3, 0.1, 0.03]:
-        for target_fn in ["sinc", "ackley", "pendulum", "mnist"]:
+    for lengthscale in lengthscales:
+        for target_fn in targets:
             print(f"Plotting results for {target_fn} (lengthscale {lengthscale})")
-            savepath = f"plots/{target_fn}/lengthscale_{lengthscale}_gradient_ablation.pdf"
+            savepath = (
+                f"plots/{target_fn}/lengthscale_{lengthscale}_gradient_ablation.pdf"
+            )
             plot(target_fn, lengthscale, methods, profiles, savepath)
             print(f"Done!\n")
 
     methods = ["wycoff", "wycoff_sample_from_gp", "shilton"]
-    profiles = ["rbf", "matern52", "matern32"]
-    for lengthscale in [0.3, 0.1, 0.03]:
-        for target_fn in ["sinc", "ackley", "pendulum", "mnist"]:
+    for lengthscale in lengthscales:
+        for target_fn in targets:
             print(f"Plotting results for {target_fn} (lengthscale {lengthscale})")
-            savepath = f"plots/{target_fn}/lengthscale_{lengthscale}_sampling_ablation.pdf"
+            savepath = (
+                f"plots/{target_fn}/lengthscale_{lengthscale}_sampling_ablation.pdf"
+            )
             plot(target_fn, lengthscale, methods, profiles, savepath)
             print(f"Done!\n")
