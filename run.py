@@ -116,12 +116,12 @@ def run_wycoff(
                 max_restarts=acquisition_max_restarts,
             )
             p = p.reshape(k, kernel.d + 1)
+            f = rkhs.Function.from_array(kernel, p)
             acquisition_time += time.time() - timer
             print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
             print("Evaluating target function at new acquisition point...")
             timer = time.time()
-            f = rkhs.Function.from_array(kernel, p)
             y = target_fn(f)
             target_evaluation_time += time.time() - timer
             print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
@@ -216,12 +216,12 @@ def run_vellanky(
                 candidates=candidate_sampler.random(n=acquisition_raw_samples),
                 max_restarts=acquisition_max_restarts,
             )
+            f = rkhs.BernsteinPolynomial.from_array(c)
             acquisition_time += time.time() - timer
             print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
             print("Evaluating target function at new acquisition point...")
             timer = time.time()
-            f = rkhs.BernsteinPolynomial.from_array(c)
             y = target_fn(f)
             target_evaluation_time += time.time() - timer
             print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
@@ -464,12 +464,12 @@ def run_vien(
                 extra_args=x0,
                 max_restarts=acquisition_max_restarts,
             )
+            f = sparsify(rkhs.Function(kernel, x=x, a=a), k=k)  # type: ignore
             acquisition_time += time.time() - timer
             print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
             print("Evaluating target function at new acquisition point...")
             timer = time.time()
-            f = sparsify(rkhs.Function(kernel, x=x, a=a), k=k)  # type: ignore
             y = target_fn(f)
             target_evaluation_time += time.time() - timer
             print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
@@ -507,12 +507,24 @@ def run_shilton(
     acquisition_raw_samples: int,
     acquisition_max_restarts: int,
 ):
-    def sample_from_gp_prior(basis_size: int, grid_size: int = 30):
-        xs = grid_sampler.random(n=grid_size)
+    def sample_from_gp_prior(basis_size: int):
+        xs = grid_sampler.random(n=maximum_k)
         mean = jnp.zeros(len(xs))
         cov = kernel(xs, xs)
         ys = rng.multivariate_normal(mean, cov, size=basis_size)
+        ys = jax.nn.sigmoid(4 * (ys - 0.5))  # squash to [0, 1]
         return xs, ys
+
+    def linear_combination(
+        xs_grid: Float[Array, "n d"],
+        ys_grids: Float[Array, "n b"],
+        b_grid: Float[Array, "n"],
+        c: Float[Array, "b"],
+    ):
+        ys_grid = jnp.array(ys_grids.T @ c + b_grid)
+        ys_grid = jax.nn.sigmoid(4 * (ys_grid - 0.5))  # squash to [0, 1]
+        f = rkhs.Function.from_xy(kernel, x=xs_grid, y=ys_grid)
+        return f
 
     # initialize run rng and timers
     rng = np.random.default_rng(seed=seed)
@@ -547,7 +559,7 @@ def run_shilton(
             print(f"Sampling random subspace of dimension {n}...")
             timer = time.time()
             xs_grid, ys_grids = sample_from_gp_prior(basis_size=n)
-            b_grid = np.array([fs[jnp.argmin(ys)](x) for x in xs_grid])
+            b_grid = jnp.array([fs[jnp.argmin(ys)](x) for x in xs_grid])
             acquisition_time += time.time() - timer
             print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
@@ -555,8 +567,7 @@ def run_shilton(
             @jax.jit
             @jax.value_and_grad
             def acquisition_loss(c: Float[Array, "n"]):
-                ys_grid = jnp.array(ys_grids.T @ c + b_grid)
-                f = rkhs.Function.from_xy(kernel, x=xs_grid, y=ys_grid)
+                f = linear_combination(xs_grid, ys_grids, b_grid, c)
                 mu, cov = surrogate_model.predict([f])
                 return -acquisition.log_expected_improvement(
                     mu=mu.squeeze(),
@@ -571,13 +582,12 @@ def run_shilton(
                 candidates=sampler.random(n=acquisition_raw_samples),
                 max_restarts=acquisition_max_restarts,
             )
+            f = linear_combination(xs_grid, ys_grids, b_grid, c)
             acquisition_time += time.time() - timer
             print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
             print("Evaluating target function at new acquisition point...")
             timer = time.time()
-            ys_grid = jnp.array(ys_grids.T @ c + b_grid)
-            f = rkhs.Function.from_xy(kernel, x=xs_grid, y=ys_grid)
             y = target_fn(f)
             target_evaluation_time += time.time() - timer
             print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
@@ -614,7 +624,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--lengthscale", type=float, required=True)
     parser.add_argument(
-        "--profile", choices=["rbf", "matern12", "matern32", "matern52"]
+        "--profile", choices=["rbf", "matern52", "matern32", "matern12"]
     )
     parser.add_argument("--seed", type=int, required=True)
     # simulation parameters

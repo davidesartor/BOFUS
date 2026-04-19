@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
+# bash sweep.sh sinc 4G 2:00:00
+# bash sweep.sh ackley 4G 2:00:00
+# bash sweep.sh hartmann 4G 2:00:00
+# bash sweep.sh pendulum 4G 4:00:00
+# bash sweep.sh pinwheel 4G 4:00:00
+# bash sweep.sh mnist 12G 12:00:00
 
-target_fn=${1:?Usage: bash $0 <target_fn> <memory> <time> [--skip_existing]}
-memory=${2:?Usage: bash $0 <target_fn> <memory> <time> [--skip_existing]}
-time=${3:?Usage: bash $0 <target_fn> <memory> <time> [--skip_existing]}
-skip_existing=false
-[[ "${4}" == "--skip_existing" ]] && skip_existing=true
+target_fn=${1:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
+memory=${2:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
+time=${3:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
+force_rerun=false
+[[ "${4}" == "--force_rerun" ]] && force_rerun=true
 
-profiles=(rbf matern52 matern32)
+profiles=(rbf matern52 matern32 matern12)
 lengthscales=(0.3 0.1 0.03)
 seeds=($(seq 0 9))
 
@@ -23,7 +29,7 @@ variants=(
 )
 
 # GENERATE A LIST OF COMBINATIONS TO RUN 
-# if --rerun, only include combinations for which the result file is missing
+# only include missing combinations unless --force_rerun is specified
 combos=()
 for profile in "${profiles[@]}"; do
 for lengthscale in "${lengthscales[@]}"; do
@@ -38,7 +44,7 @@ for variant in "${variants[@]}"; do
         dir=$method
     fi
     result="results/${dir}/${profile}/${target_fn}/lengthscale_${lengthscale}/seed_${seed}.pkl"
-    if ! $skip_existing || [[ ! -e "$result" ]]; then
+    if $force_rerun || [[ ! -e "$result" ]]; then
         combos+=("$profile $lengthscale $seed $variant")
     fi
 done
