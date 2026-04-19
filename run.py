@@ -264,6 +264,7 @@ def run_kundu(
         basis_fs: list[rkhs.Function],
         coefficients: Float[Array, "n"],
     ) -> rkhs.Function:
+        coefficients = 2 * coefficients - 1  # [0, 1] -> [-1, 1]
         x = [fi.x for fi in basis_fs]
         a = [fi.a * ci for fi, ci in zip(basis_fs, coefficients)]
         return rkhs.Function(kernel, x=jnp.concat(x), a=jnp.concat(a))
@@ -521,6 +522,7 @@ def run_shilton(
         b_grid: Float[Array, "n"],
         c: Float[Array, "b"],
     ):
+        c = 2 * c - 1  # [0, 1] -> [-1, 1]
         ys_grid = jnp.array(ys_grids.T @ c + b_grid)
         ys_grid = jax.nn.sigmoid(4 * (ys_grid - 0.5))  # squash to [0, 1]
         f = rkhs.Function.from_xy(kernel, x=xs_grid, y=ys_grid)

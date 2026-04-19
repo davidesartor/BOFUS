@@ -3,8 +3,8 @@
 # bash sweep.sh ackley 4G 2:00:00
 # bash sweep.sh hartmann 4G 2:00:00
 # bash sweep.sh pendulum 4G 4:00:00
-# bash sweep.sh pinwheel 4G 4:00:00
-# bash sweep.sh mnist 12G 12:00:00
+# bash sweep.sh pinwheel 4G 8:00:00
+# bash sweep.sh mnist 12G 8:00:00
 
 target_fn=${1:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
 memory=${2:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
@@ -12,9 +12,9 @@ time=${3:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
 force_rerun=false
 [[ "${4}" == "--force_rerun" ]] && force_rerun=true
 
-profiles=(rbf matern52 matern32 matern12)
+profiles=(rbf matern52 matern32)
 lengthscales=(0.3 0.1 0.03)
-seeds=($(seq 0 9))
+seeds=($(seq 0 15))
 
 # "method [extra_flags...]"
 variants=(
@@ -36,6 +36,11 @@ for lengthscale in "${lengthscales[@]}"; do
 for seed in "${seeds[@]}"; do
 for variant in "${variants[@]}"; do
     read -r method extra_flags <<< "$variant"
+    # skip invalid method-target_fn combinations
+    if [[ "$method" == "vellanky" && "$target_fn" =~ ^(ackley|hartmann|pendulum)$ ]]; then
+        continue
+    fi
+    # determine result path based on method and extra flags
     if [[ "$extra_flags" == *"--disable_natural_gradient"* ]]; then
         dir="${method}_no_natural_grad"
     elif [[ "$extra_flags" == *"--sample_candidates_from_gp"* ]]; then
@@ -44,6 +49,7 @@ for variant in "${variants[@]}"; do
         dir=$method
     fi
     result="results/${dir}/${profile}/${target_fn}/lengthscale_${lengthscale}/seed_${seed}.pkl"
+    # only add to combos if result doesn't exist unless --force_rerun 
     if $force_rerun || [[ ! -e "$result" ]]; then
         combos+=("$profile $lengthscale $seed $variant")
     fi

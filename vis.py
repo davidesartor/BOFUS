@@ -58,7 +58,7 @@ def plot(
 
     ax_ys.set(title="Target function", ylabel="Target", xlabel="Acquisitions")
     ax_ys.grid(True)
-    ax_ys.yscale("log")
+    ax_ys.set_yscale("log")
 
     method_handles = [
         mlines.Line2D([], [], color=colors[i], linewidth=2, label=method)
