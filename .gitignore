@@ -1,6 +1,9 @@
 # Ignore npz and pkl files
 *.npz
 *.pkl
+*.csv
+*.pdf
+
 
 # Ignore logs
 logs/
