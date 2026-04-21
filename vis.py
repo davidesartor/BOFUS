@@ -90,7 +90,16 @@ def plot(
 
 if __name__ == "__main__":
     profiles = ["rbf", "matern52", "matern32", "matern12"]
-    targets = ["sinc", "ackley", "hartmann", "pendulum", "pinwheel", "mnist"]
+    targets = [
+        "sinc",
+        "gramacylee",
+        "rosenbrock",
+        "ackley",
+        "hartmann",
+        "pendulum",
+        "mnist",
+        "pinwheel",
+    ]
     lengthscales = [0.3, 0.1, 0.03]
 
     methods = ["wycoff", "kundu", "vien", "shilton", "vellanky"]

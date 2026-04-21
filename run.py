@@ -622,7 +622,16 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--target_fn",
-        choices=["mnist", "sinc", "pendulum", "ackley", "hartmann", "pinwheel"],
+        choices=[
+            "sinc",
+            "gramacylee",
+            "rosenbrock",
+            "ackley",
+            "hartmann",
+            "pendulum",
+            "mnist",
+            "pinwheel",
+        ],
     )
     parser.add_argument("--lengthscale", type=float, required=True)
     parser.add_argument(
@@ -643,11 +652,13 @@ if __name__ == "__main__":
 
     # problem setup
     target_fn = {
-        "mnist": targets.MNIST,
         "sinc": targets.SincProjection,
-        "pendulum": targets.Pendulum,
+        "gramacylee": lambda: targets.Ridge(targets.virtual_library.GramacyLee(), d=1),
+        "rosenbrock": lambda: targets.Ridge(targets.virtual_library.Rosenbrock(), d=1),
         "ackley": lambda: targets.Ridge(targets.virtual_library.Ackley(), d=2),
         "hartmann": lambda: targets.Ridge(targets.virtual_library.Hartmann3(), d=3),
+        "pendulum": targets.Pendulum,
+        "mnist": targets.MNIST,
         "pinwheel": targets.PinWheel,
     }[args.target_fn]()
     kernel = rkhs.RKHS(
