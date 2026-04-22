@@ -3,6 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+import joblib
 
 
 def read_dir(method, profile, target_fn, lengthscale):
@@ -45,19 +46,20 @@ if __name__ == "__main__":
         "pinwheel",
     ]
     lengthscales = [0.3, 0.1, 0.03]
-    methods = ["wycoff", "kundu", "vien", "shilton", "vellanky"]
+    methods = ["random", "wycoff", "kundu", "vien", "shilton", "vellanky"]
     methods += [
         "wycoff_no_natural_grad",
         "vien_no_natural_grad",
         "wycoff_sample_from_gp",
+        "shilton_reduced_grid",
     ]
 
-    dfs = [
-        read_dir(method, profile, target_fn, lengthscale)
+    dfs = joblib.Parallel(-1)(
+        joblib.delayed(read_dir)(method, profile, target_fn, lengthscale)
         for method, profile, target_fn, lengthscale in tqdm(
             list(product(methods, profiles, targets, lengthscales))
         )
-    ]
+    )
     dfs = [df for df in dfs if df is not None]
     df = pd.concat(dfs, ignore_index=True)
     df.to_csv("results.csv", index=False)

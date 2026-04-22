@@ -3,16 +3,23 @@ import statsmodels.formula.api as smf
 import argparse
 
 
-def fit_table(df, outcomes, groups_col="group", verbose=False):
+def fit_table(df, outcomes, reference="random", groups_col="group", verbose=False):
     rows = {}
     for outcome in outcomes:
-        m = smf.mixedlm(f"{outcome} ~ method - 1", df, groups=df[groups_col]).fit()
+        m = smf.mixedlm(
+            # f"{outcome} ~ method - 1" # this disables intercept
+            f"{outcome} ~ C(method, Treatment(reference='{reference}'))", # makes intercept = c(reference)
+            df, 
+            groups=df[groups_col],
+        ).fit()
         if verbose:
             print(m.summary())
         rows[outcome] = m.params
     tbl = pd.DataFrame(rows)
     tbl.index = tbl.index.str.removeprefix("method[")
+    tbl.index = tbl.index.str.removeprefix(f"C(method, Treatment(reference='{reference}'))[T.")
     tbl.index = tbl.index.str.removesuffix("]")
+    tbl.index = tbl.index.str.replace("Intercept", reference)
     return tbl
 
 
@@ -36,7 +43,7 @@ if __name__ == "__main__":
     sub = sub.replace("vien_no_natural_grad", "vien")
 
     # only show the methods we care about
-    methods = ["wycoff", "vien", "shilton", "vellanky", "kundu"]
+    methods = ["random", "wycoff", "vien", "vellanky", "shilton", "kundu"]
     sub = sub[sub["method"].isin(methods)]
     print(fit_table(sub, outcomes, verbose=args.verbose).loc[methods].to_string())
     print("========================================")

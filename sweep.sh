@@ -20,6 +20,7 @@ seeds=($(seq 0 15))
 
 # "method [extra_flags...]"
 variants=(
+    "random"
     "wycoff"
     "vien"
     "shilton"
@@ -28,6 +29,7 @@ variants=(
     "wycoff --disable_natural_gradient"
     "vien   --disable_natural_gradient"
     "wycoff --sample_candidates_from_gp"
+    "shilton --reduced_grid"
 )
 
 # GENERATE A LIST OF COMBINATIONS TO RUN 
@@ -47,6 +49,8 @@ for variant in "${variants[@]}"; do
         dir="${method}_no_natural_grad"
     elif [[ "$extra_flags" == *"--sample_candidates_from_gp"* ]]; then
         dir="${method}_sample_from_gp"
+    elif [[ "$extra_flags" == *"--reduced_grid"* ]]; then
+        dir="${method}_reduced_grid"
     else
         dir=$method
     fi

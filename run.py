@@ -1,3 +1,4 @@
+from typing import Literal
 from functools import partial
 from jaxtyping import Array, Float
 import jax
@@ -14,6 +15,77 @@ import pickle
 from src import gp, kernels, acquisition, rkhs, targets
 
 jax.config.update("jax_enable_x64", True)
+
+
+def run_random(
+    seed: int,
+    target_fn: targets.TestFunction,
+    kernel: rkhs.RKHS,
+    surrogate_model: Literal[None],
+    # simulation parameters
+    initial_acquisitions: int,
+    minimum_k: int,  # number of basis points
+    maximum_k: int,  # number of basis points
+    acquisitions_each_k: int,
+    acquisition_raw_samples: int,
+    acquisition_max_restarts: int,
+):
+    # initialize run rng and timers
+    rng = np.random.default_rng(seed=seed)
+    surrogate_fit_time = 0.0
+    acquisition_time = 0.0
+    target_evaluation_time = 0.0
+
+    print("Sampling initial acquisition...")
+    timer = time.time()
+    k = maximum_k
+    candidate_sampler = sp.stats.qmc.LatinHypercube(d=k * (kernel.d + 1), rng=rng)
+    ps = candidate_sampler.random(n=initial_acquisitions)
+    fs = [rkhs.Function.from_array(kernel, p.reshape(k, kernel.d + 1)) for p in ps]
+    acquisition_time += time.time() - timer
+    print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
+
+    print("Evaluating target function at initial acquisition points...")
+    timer = time.time()
+    ys = jnp.array([target_fn(f) for f in fs])
+    target_evaluation_time += time.time() - timer
+    print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
+
+    # sequential acquisition loop
+    for k in range(minimum_k, maximum_k + 1):
+        candidate_sampler = sp.stats.qmc.LatinHypercube(d=k * (kernel.d + 1), rng=rng)
+        for i in range(acquisitions_each_k):
+            print(f"Optimizing acquisition function...")
+            timer = time.time()
+            ps = candidate_sampler.random(n=acquisition_raw_samples)
+            p = ps[0].reshape(k, kernel.d + 1)
+            f = rkhs.Function.from_array(kernel, p)
+            acquisition_time += time.time() - timer
+            print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
+
+            print("Evaluating target function at new acquisition point...")
+            timer = time.time()
+            y = target_fn(f)
+            target_evaluation_time += time.time() - timer
+            print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
+
+            print("Updating surrogate model with new acquisition point...")
+            timer = time.time()
+            fs = fs + [f]
+            ys = jnp.concatenate([ys, y[None]])
+            surrogate_fit_time += time.time() - timer
+            print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
+
+            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
+            jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
+
+    return dict(
+        observation_locations=fs,
+        observation_values=ys,
+        surrogate_fit_time=surrogate_fit_time,
+        acquisition_time=acquisition_time,
+        target_evaluation_time=target_evaluation_time,
+    )
 
 
 def run_wycoff(
@@ -144,7 +216,6 @@ def run_wycoff(
         acquisition_time=acquisition_time,
         target_evaluation_time=target_evaluation_time,
     )
-
 
 def run_vellanky(
     seed: int,
@@ -507,9 +578,11 @@ def run_shilton(
     acquisitions_each_k: int,
     acquisition_raw_samples: int,
     acquisition_max_restarts: int,
+    # ablation flags
+    reduced_grid: bool = False,
 ):
-    def sample_from_gp_prior(basis_size: int):
-        xs = grid_sampler.random(n=maximum_k)
+    def sample_from_gp_prior(basis_size: int, grid_size=50):
+        xs = grid_sampler.random(n=maximum_k if reduced_grid else grid_size)
         mean = jnp.zeros(len(xs))
         cov = kernel(xs, xs)
         ys = rng.multivariate_normal(mean, cov, size=basis_size)
@@ -618,7 +691,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--method",
-        choices=["wycoff", "vellanky", "vien", "kundu", "shilton"],
+        choices=["random", "wycoff", "vellanky", "vien", "kundu", "shilton"],
     )
     parser.add_argument(
         "--target_fn",
@@ -648,6 +721,7 @@ if __name__ == "__main__":
     # ablations flags, only used by some methods
     parser.add_argument("--disable_natural_gradient", action="store_true")
     parser.add_argument("--sample_candidates_from_gp", action="store_true")
+    parser.add_argument("--reduced_grid", action="store_true")
     args = parser.parse_args()
 
     # problem setup
@@ -675,6 +749,7 @@ if __name__ == "__main__":
         "matern52": kernels.Matern(nu=5 / 2),
     }[args.profile]
     run_simulation_fn, surrogate_model = {
+        "random": (run_random, None),
         "wycoff": (run_wycoff, gp.FunctionalGaussianProcess(profile=profile)),
         "vellanky": (run_vellanky, gp.GaussianProcess(profile=profile)),
         "kundu": (run_kundu, gp.FunctionalGaussianProcess(profile=profile)),
@@ -689,6 +764,9 @@ if __name__ == "__main__":
     if args.sample_candidates_from_gp:
         print("Sampling acquisition candidates from GP prior...")
         run_simulation_fn = partial(run_simulation_fn, sample_candidates_from_gp=True)
+    if args.reduced_grid:
+        print("Using reduced grid...")
+        run_simulation_fn = partial(run_simulation_fn, reduced_grid=True)
 
     # run simulation
     results = run_simulation_fn(
@@ -710,6 +788,8 @@ if __name__ == "__main__":
         save_dir = f"results/{args.method}_no_natural_grad/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}/"
     if args.sample_candidates_from_gp:
         save_dir = f"results/{args.method}_sample_from_gp/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}/"
+    if args.reduced_grid:
+        save_dir = f"results/{args.method}_reduced_grid/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}/"
     os.makedirs(save_dir, exist_ok=True)
     save_path = f"{save_dir}/seed_{args.seed}"
     pickle.dump(results, open(f"{save_path}.pkl", "wb"))
