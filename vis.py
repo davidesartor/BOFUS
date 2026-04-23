@@ -2,6 +2,7 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import numpy as np
+import joblib
 
 
 def plot_times(ax, times: np.ndarray, position: int):
@@ -29,8 +30,7 @@ def plot(
     profiles: list[str],
     savepath: str,
 ):
-    if target_fn in ["pendulum", "ackley", "hartmann"]:
-        methods = [m for m in methods if m != "vellanky"]
+    print(f"Plotting results for {target_fn} (lengthscale {lengthscale})")
     colors = plt.cm.tab10.colors
     linestyles = ["-", "--", ":", "-."]
 
@@ -49,11 +49,10 @@ def plot(
                     for f in os.listdir(save_dir)
                     if f.endswith(".pkl")
                 ]
-                ys = np.array([r["observation_values"] for r in results])
-            except Exception as e:
-                print(f"Error loading {method} {target_fn} l={lengthscale}: {e}")
+            except FileNotFoundError:
+                print(f"Directory not found: {save_dir}")
                 continue
-
+            ys = np.array([r["observation_values"] for r in results])
             plot_ys(ax_ys, ys, style={"linestyle": linestyle, "color": color})
 
     ax_ys.set(title="Target function", ylabel="Target", xlabel="Acquisitions")
@@ -86,10 +85,11 @@ def plot(
     os.makedirs(f"plots/{target_fn}", exist_ok=True)
     fig.savefig(savepath, bbox_inches="tight")
     plt.close(fig)
+    print(f"Done!\n")
 
 
 if __name__ == "__main__":
-    profiles = ["rbf", "matern52", "matern32", "matern12"]
+    profiles = ["rbf", "matern52", "matern32"]
     targets = [
         "sinc",
         "gramacylee",
@@ -102,30 +102,41 @@ if __name__ == "__main__":
     ]
     lengthscales = [0.3, 0.1, 0.03]
 
-    methods = ["wycoff", "kundu", "vien", "shilton", "vellanky"]
-    for lengthscale in lengthscales:
-        for target_fn in targets:
-            print(f"Plotting results for {target_fn} (lengthscale {lengthscale})")
-            savepath = f"plots/{target_fn}/lengthscale_{lengthscale}.pdf"
-            plot(target_fn, lengthscale, methods, profiles, savepath)
-            print(f"Done!\n")
+    methods = ["wycoff", "kundu", "vien", "shilton", "vellanky", "random"]
+    joblib.Parallel(n_jobs=-1)(
+        joblib.delayed(plot)(
+            target_fn,
+            lengthscale,
+            methods,
+            profiles,
+            f"plots/{target_fn}/lengthscale_{lengthscale}.pdf",
+        )
+        for lengthscale in lengthscales
+        for target_fn in targets
+    )
 
     methods = ["wycoff", "wycoff_no_natural_grad", "vien", "vien_no_natural_grad"]
-    for lengthscale in lengthscales:
-        for target_fn in targets:
-            print(f"Plotting results for {target_fn} (lengthscale {lengthscale})")
-            savepath = (
-                f"plots/{target_fn}/lengthscale_{lengthscale}_gradient_ablation.pdf"
-            )
-            plot(target_fn, lengthscale, methods, profiles, savepath)
-            print(f"Done!\n")
+    joblib.Parallel(n_jobs=-1)(
+        joblib.delayed(plot)(
+            target_fn,
+            lengthscale,
+            methods,
+            profiles,
+            f"plots/{target_fn}/lengthscale_{lengthscale}_gradient_ablation.pdf",
+        )
+        for lengthscale in lengthscales
+        for target_fn in targets
+    )
 
     methods = ["wycoff", "wycoff_sample_from_gp", "shilton"]
-    for lengthscale in lengthscales:
-        for target_fn in targets:
-            print(f"Plotting results for {target_fn} (lengthscale {lengthscale})")
-            savepath = (
-                f"plots/{target_fn}/lengthscale_{lengthscale}_sampling_ablation.pdf"
-            )
-            plot(target_fn, lengthscale, methods, profiles, savepath)
-            print(f"Done!\n")
+    joblib.Parallel(n_jobs=-1)(
+        joblib.delayed(plot)(
+            target_fn,
+            lengthscale,
+            methods,
+            profiles,
+            f"plots/{target_fn}/lengthscale_{lengthscale}_sampling_ablation.pdf",
+        )
+        for lengthscale in lengthscales
+        for target_fn in targets
+    )

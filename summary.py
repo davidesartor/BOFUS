@@ -43,7 +43,7 @@ if __name__ == "__main__":
         "hartmann",
         "pendulum",
         "mnist",
-        "pinwheel",
+        #"pinwheel",
     ]
     lengthscales = [0.3, 0.1, 0.03]
     methods = ["random", "wycoff", "kundu", "vien", "shilton", "vellanky"]
