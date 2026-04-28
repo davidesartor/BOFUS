@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # bash sweep.sh sinc 4G 2:00:00
 # bash sweep.sh gramacylee 4G 2:00:00
-# bash sweep.sh rosenbrock 4G 2:00:00
 # bash sweep.sh ackley 4G 2:00:00
 # bash sweep.sh hartmann 4G 2:00:00
+# bash sweep.sh rosenbrock 4G 2:00:00
 # bash sweep.sh pendulum 4G 4:00:00
-# bash sweep.sh pinwheel 4G 16:00:00
 # bash sweep.sh mnist 12G 8:00:00
+# bash sweep.sh pinwheel 4G 4:00:00
+# bash sweep.sh brachistocrone 4G 4:00:00
 
 target_fn=${1:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
 memory=${2:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
@@ -14,9 +15,9 @@ time=${3:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
 force_rerun=false
 [[ "${4}" == "--force_rerun" ]] && force_rerun=true
 
-profiles=(rbf matern52 matern32)
-lengthscales=(0.3 0.1 0.03)
-seeds=($(seq 0 15))
+profiles=(rbf matern52 matern32 matern12)
+lengthscales=(0.4 0.2 0.1 0.05 0.025)
+seeds=($(seq 0 7))
 
 # "method [extra_flags...]"
 variants=(
@@ -41,7 +42,7 @@ for seed in "${seeds[@]}"; do
 for variant in "${variants[@]}"; do
     read -r method extra_flags <<< "$variant"
     # skip invalid method-target_fn combinations
-    if [[ "$method" == "vellanky" && "$target_fn" =~ ^(ackley|hartmann|pendulum)$ ]]; then
+    if [[ "$method" == "vellanky" && "$target_fn" =~ ^(ackley|hartmann|rosenbrock|pendulum)$ ]]; then
         continue
     fi
     # determine result path based on method and extra flags

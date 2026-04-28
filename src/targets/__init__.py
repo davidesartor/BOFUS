@@ -29,7 +29,9 @@ class Ridge(TestFunction):
 
     def __call__(self, f: Callable[[Float[Array, "d"]], Scalar]) -> Scalar:
         f = jax.vmap(jax.vmap(f))  # vectorize so it can be evaluated on x in one go
-        return self.profile(self.b + jnp.sum(self.a * f(self.x), axis=-1))
+        g = self.b + jnp.sum(self.a * f(self.x), axis=-1)
+        g = jax.nn.sigmoid(g)  # squash to [0, 1]
+        return self.profile(g)
 
 
 class SincProjection:

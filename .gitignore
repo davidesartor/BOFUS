@@ -3,6 +3,7 @@
 *.pkl
 *.csv
 *.pdf
+*tar.gz
 
 
 # Ignore logs

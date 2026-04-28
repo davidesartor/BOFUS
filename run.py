@@ -3,6 +3,7 @@ from functools import partial
 from jaxtyping import Array, Float
 import jax
 import jax.numpy as jnp
+import jax.scipy as jsp
 import equinox as eqx
 import scipy as sp
 import numpy as np
@@ -54,30 +55,28 @@ def run_random(
     # sequential acquisition loop
     for k in range(minimum_k, maximum_k + 1):
         candidate_sampler = sp.stats.qmc.LatinHypercube(d=k * (kernel.d + 1), rng=rng)
-        for i in range(acquisitions_each_k):
-            print(f"Optimizing acquisition function...")
-            timer = time.time()
-            ps = candidate_sampler.random(n=acquisition_raw_samples)
-            p = ps[0].reshape(k, kernel.d + 1)
-            f = rkhs.Function.from_array(kernel, p)
-            acquisition_time += time.time() - timer
-            print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
+        print(f"Optimizing acquisition function...")
+        timer = time.time()
+        ps = candidate_sampler.random(n=acquisitions_each_k)
+        f = [rkhs.Function.from_array(kernel, p.reshape(k, kernel.d + 1)) for p in ps]
+        acquisition_time += time.time() - timer
+        print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
-            print("Evaluating target function at new acquisition point...")
-            timer = time.time()
-            y = target_fn(f)
-            target_evaluation_time += time.time() - timer
-            print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
+        print("Evaluating target function at new acquisition point...")
+        timer = time.time()
+        y = jnp.array([target_fn(fi) for fi in f])
+        target_evaluation_time += time.time() - timer
+        print(f"Done! (total target eval time: {target_evaluation_time:.2f}s)\n")
 
-            print("Updating surrogate model with new acquisition point...")
-            timer = time.time()
-            fs = fs + [f]
-            ys = jnp.concatenate([ys, y[None]])
-            surrogate_fit_time += time.time() - timer
-            print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
+        print("Updating surrogate model with new acquisition point...")
+        timer = time.time()
+        fs = fs + f
+        ys = jnp.concatenate([ys, y])
+        surrogate_fit_time += time.time() - timer
+        print(f"Done! (total surrogate fit time: {surrogate_fit_time:.2f}s)\n")
 
-            print(f"Iteration {i+1}: current= {y:.8f}, best = {ys.min():.8f}\n")
-            jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
+        print(f"Iteration {k+1}: current= {y[-1]:.8f}, best = {ys.min():.8f}\n")
+        jax.clear_caches()  # avoids memory leaks caused by input changing shape every iter :(
 
     return dict(
         observation_locations=fs,
@@ -113,12 +112,12 @@ def run_wycoff(
         f2 = rkhs.Function.from_array(kernel, p2)
         return f1.a @ kernel(f1.x, f2.x) @ f2.a
 
-    def sample_from_gp_prior(k: int):
+    def sample_from_gp_prior(k: int, grid_sampler: sp.stats.qmc.LatinHypercube):
         xs = grid_sampler.random(n=k)
         mean = jnp.zeros(len(xs))
         cov = kernel(xs, xs)
         ys = rng.multivariate_normal(mean, cov)
-        ys = jax.nn.sigmoid(4 * (ys - 0.5))  # squash to [0, 1]
+        ys = jsp.special.expit(2 * ys)  # squash to [0, 1]
         ps = jnp.concat([xs, ys[:, None]], axis=-1)
         return ps.flatten()  # (k, d+1) -> (k * (d+1),)
 
@@ -132,9 +131,9 @@ def run_wycoff(
     timer = time.time()
     k = maximum_k
     candidate_sampler = sp.stats.qmc.LatinHypercube(d=k * (kernel.d + 1), rng=rng)
+    grid_sampler = sp.stats.qmc.LatinHypercube(d=kernel.d, rng=rng)
     if sample_candidates_from_gp:
-        grid_sampler = sp.stats.qmc.LatinHypercube(d=kernel.d, rng=rng)
-        ps = [sample_from_gp_prior(k) for _ in range(initial_acquisitions)]
+        ps = [sample_from_gp_prior(k, grid_sampler) for _ in range(initial_acquisitions)]
     else:
         ps = candidate_sampler.random(n=initial_acquisitions)
     fs = [rkhs.Function.from_array(kernel, p.reshape(k, kernel.d + 1)) for p in ps]
@@ -179,7 +178,7 @@ def run_wycoff(
             print(f"Optimizing acquisition function...")
             timer = time.time()
             if sample_candidates_from_gp:
-                ps = [sample_from_gp_prior(k) for _ in range(acquisition_raw_samples)]
+                ps = [sample_from_gp_prior(k, grid_sampler) for _ in range(acquisition_raw_samples)]
             else:
                 ps = candidate_sampler.random(n=acquisition_raw_samples)
             p, _ = acquisition.optimize_lhs_candidates(
@@ -216,6 +215,7 @@ def run_wycoff(
         acquisition_time=acquisition_time,
         target_evaluation_time=target_evaluation_time,
     )
+
 
 def run_vellanky(
     seed: int,
@@ -331,6 +331,7 @@ def run_kundu(
     acquisition_max_restarts: int,
 ):
 
+    @eqx.filter_jit
     def linear_combination(
         basis_fs: list[rkhs.Function],
         coefficients: Float[Array, "n"],
@@ -338,7 +339,10 @@ def run_kundu(
         coefficients = 2 * coefficients - 1  # [0, 1] -> [-1, 1]
         x = [fi.x for fi in basis_fs]
         a = [fi.a * ci for fi, ci in zip(basis_fs, coefficients)]
-        return rkhs.Function(kernel, x=jnp.concat(x), a=jnp.concat(a))
+        f = rkhs.Function(kernel, x=jnp.concat(x), a=jnp.concat(a))
+        y = jax.nn.tanh(jax.vmap(f)(f.x))  # squash to [-1, 1]
+        f = rkhs.Function.from_xy(kernel, x=f.x, y=y)
+        return f
 
     # initialize run rng and timers
     rng = np.random.default_rng(seed=seed)
@@ -445,6 +449,15 @@ def run_vien(
     # ablations
     use_natural_gradient: bool = True,
 ):
+    @partial(jax.jacobian, argnums=1)
+    @partial(jax.jacobian, argnums=0)
+    def preconditioning_matrix(y1, y2, x):
+        y1 = 2 * y1 - 1  # [0, 1] -> [-1, 1]
+        y2 = 2 * y2 - 1  # [0, 1] -> [-1, 1]
+        f1 = rkhs.Function.from_xy(kernel, x=x, y=y1)
+        f2 = rkhs.Function.from_xy(kernel, x=x, y=y2)
+        return f1.a @ kernel(f1.x, f2.x) @ f2.a
+    
     @eqx.filter_jit
     def sparsify(f: rkhs.Function, k: int) -> rkhs.Function:
         """Sparsify using Kernel Matching Pursuit (Vincent & Bengio 2002)"""
@@ -452,11 +465,8 @@ def run_vien(
         norm = jnp.linalg.norm(D, axis=0)
 
         def scan_fn(residual, _):
-            # select the basis function with the largest correlation to the residual
             gamma = jnp.argmax(jnp.abs((D @ residual) / norm))
-            # and compute the corresponding coefficient
             alpha = (D[gamma] @ residual) / norm[gamma] ** 2
-            # project the residual onto the remaining basis functions
             residual = residual - alpha * D[gamma]
             return residual, (alpha, gamma)
 
@@ -507,15 +517,18 @@ def run_vien(
             all_xs = jnp.unique(jnp.concat([f.x for f in fs]), axis=0)
             a0 = [jnp.concat([fi.a, jnp.zeros(len(all_xs))]) for fi in candidate_fs]
             x0 = [jnp.concat([fi.x, all_xs]) for fi in candidate_fs]
+            y0 = [jax.vmap(rkhs.Function(kernel, x=xi, a=ai))(xi) for xi, ai in zip(x0, a0)]
+            y0 = [jsp.special.expit(2 * yi) for yi in y0]  # squash to [0, 1]
             acquisition_time += time.time() - timer
             print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
             # define acquisition loss
             @jax.jit
-            def acquisition_loss(a: Float[Array, "k"], x: Float[Array, "k d"]):
+            def acquisition_loss(y: Float[Array, "k"], x: Float[Array, "k d"]):
                 @jax.value_and_grad
-                def loss(a: Float[Array, "k"]):
-                    f = rkhs.Function(kernel, x=x, a=a)
+                def loss(y: Float[Array, "k"]):
+                    y = 2 * y - 1  # [0, 1] -> [-1, 1]
+                    f = rkhs.Function.from_xy(kernel, x=x, y=y)
                     mu, cov = surrogate_model.predict([f])
                     return -acquisition.log_expected_improvement(
                         mu=mu.squeeze(),
@@ -523,20 +536,22 @@ def run_vien(
                         y_best=surrogate_model.observed_ys.min(),
                     )
 
-                val, grad = loss(a)
+                val, grad = loss(y)
                 if use_natural_gradient:
-                    grad, _, _, _ = jnp.linalg.lstsq(kernel(x, x), grad)
+                    G = preconditioning_matrix(y, y, x)
+                    grad, _, _, _ = jnp.linalg.lstsq(G, grad)
                 return val, grad
 
             print(f"Optimizing acquisition function...")
             timer = time.time()
-            a, x = acquisition.optimize_lhs_candidates(
+            y, x = acquisition.optimize_lhs_candidates(
                 acquisition_loss=acquisition_loss,
-                candidates=jnp.array(a0),
+                candidates=jnp.array(y0),
                 extra_args=x0,
                 max_restarts=acquisition_max_restarts,
             )
-            f = sparsify(rkhs.Function(kernel, x=x, a=a), k=k)  # type: ignore
+            y = 2 * y - 1  # [0, 1] -> [-1, 1]
+            f = sparsify(rkhs.Function.from_xy(kernel, x=x, y=y), k=k)  # type: ignore
             acquisition_time += time.time() - timer
             print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
 
@@ -586,18 +601,17 @@ def run_shilton(
         mean = jnp.zeros(len(xs))
         cov = kernel(xs, xs)
         ys = rng.multivariate_normal(mean, cov, size=basis_size)
-        ys = jax.nn.sigmoid(4 * (ys - 0.5))  # squash to [0, 1]
         return xs, ys
 
     def linear_combination(
         xs_grid: Float[Array, "n d"],
         ys_grids: Float[Array, "n b"],
         b_grid: Float[Array, "n"],
-        c: Float[Array, "b"],
+        coefficients: Float[Array, "b"],
     ):
-        c = 2 * c - 1  # [0, 1] -> [-1, 1]
-        ys_grid = jnp.array(ys_grids.T @ c + b_grid)
-        ys_grid = jax.nn.sigmoid(4 * (ys_grid - 0.5))  # squash to [0, 1]
+        coefficients = 2 * coefficients - 1  # [0, 1] -> [-1, 1]
+        ys_grid = jnp.array(ys_grids.T @ coefficients + b_grid)
+        ys_grid = jax.nn.tanh(ys_grid)  # squash to [-1, 1]
         f = rkhs.Function.from_xy(kernel, x=xs_grid, y=ys_grid)
         return f
 
@@ -728,9 +742,9 @@ if __name__ == "__main__":
     target_fn = {
         "sinc": targets.SincProjection,
         "gramacylee": lambda: targets.Ridge(targets.virtual_library.GramacyLee(), d=1),
-        "rosenbrock": lambda: targets.Ridge(targets.virtual_library.Rosenbrock(), d=1),
         "ackley": lambda: targets.Ridge(targets.virtual_library.Ackley(), d=2),
         "hartmann": lambda: targets.Ridge(targets.virtual_library.Hartmann3(), d=3),
+        "rosenbrock": lambda: targets.Ridge(targets.virtual_library.Rosenbrock(), d=4),
         "pendulum": targets.Pendulum,
         "mnist": targets.MNIST,
         "pinwheel": targets.PinWheel,
@@ -783,13 +797,13 @@ if __name__ == "__main__":
     )
 
     # save results
-    save_dir = f"results/{args.method}/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}/"
+    save_dir = f"results/{args.method}/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}"
     if args.disable_natural_gradient:
-        save_dir = f"results/{args.method}_no_natural_grad/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}/"
+        save_dir = f"results/{args.method}_no_natural_grad/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}"
     if args.sample_candidates_from_gp:
-        save_dir = f"results/{args.method}_sample_from_gp/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}/"
+        save_dir = f"results/{args.method}_sample_from_gp/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}"
     if args.reduced_grid:
-        save_dir = f"results/{args.method}_reduced_grid/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}/"
+        save_dir = f"results/{args.method}_reduced_grid/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}"
     os.makedirs(save_dir, exist_ok=True)
     save_path = f"{save_dir}/seed_{args.seed}"
     pickle.dump(results, open(f"{save_path}.pkl", "wb"))

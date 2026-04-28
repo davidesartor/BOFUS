@@ -61,7 +61,7 @@ class MNIST(TestFunction):
         return 1 - jnp.array(accuracy).mean()
 
     def initialize(self, key: Key, f: Callable[[Float[Array, "1"]], Scalar]):
-        activation = lambda x: f((x[None] + 3.0) / 6.0) + jax.nn.relu(x)
+        activation = lambda x: f((x[None] + 1.0) / 2.0) + jax.nn.relu(x)
         return eqx.nn.MLP(
             in_size=28 * 28,
             out_size=10,
