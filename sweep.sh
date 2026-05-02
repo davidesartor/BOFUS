@@ -1,25 +1,19 @@
 #!/usr/bin/env bash
-# bash sweep.sh sinc 4G 2:00:00
-# bash sweep.sh gramacylee 4G 2:00:00
-# bash sweep.sh ackley 4G 2:00:00
-# bash sweep.sh hartmann 4G 2:00:00
-# bash sweep.sh rosenbrock 4G 2:00:00
-# bash sweep.sh pendulum 8G 4:00:00
-# bash sweep.sh pinwheel 8G 4:00:00
-# bash sweep.sh brachistochrone 4G 4:00:00
-# bash sweep.sh mnist 30G 8:00:00
 
-target_fn=${1:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
-memory=${2:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
-time=${3:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
-force_rerun=false
-[[ "${4}" == "--force_rerun" ]] && force_rerun=true
+declare -A SWEEP_RESOURCES=(
+    [sinc]="4G 2:00:00"
+    [gramacylee]="4G 2:00:00"
+    [ackley]="4G 2:00:00"
+    [hartmann]="4G 2:00:00"
+    [rosenbrock]="4G 2:00:00"
+    [pendulum]="8G 4:00:00"
+    [pinwheel]="8G 8:00:00"
+    [brachistochrone]="4G 4:00:00"
+    [mnist]="30G 8:00:00"
+)
 
-profiles=(rbf matern52 matern32 matern12)
-lengthscales=(0.4 0.2 0.1 0.05)
-seeds=($(seq 0 7))
+deadline_hours=${1:-72}
 
-# "method [extra_flags...]"
 variants=(
     "random"
     "wycoff"
@@ -32,49 +26,74 @@ variants=(
     "wycoff --sample_candidates_from_gp"
     "shilton --reduced_grid"
 )
+multidim_fns="ackley|hartmann|rosenbrock|pendulum"
+lengthscales=(0.4 0.2 0.1 0.05)
+profiles=(rbf matern52 matern32 matern12)
+seeds=($(seq 0 15))
 
-# GENERATE A LIST OF COMBINATIONS TO RUN 
-# only include missing combinations unless --force_rerun is specified
-combos=()
+
+LOG="sweep.log"
+DEADLINE=$(( $(date +%s) + deadline_hours * 3600 ))
+MAX_JOBS_PER_SUBMISSION=200
+
+echo "[$(date)] Watcher started (PID $$), deadline in ${deadline_hours}h at $(date -d @$DEADLINE)" | tee -a "$LOG"
+
+ALL_COMBOS=()
+for target_fn in "${!SWEEP_RESOURCES[@]}"; do
+for seed in "${seeds[@]}"; do
 for profile in "${profiles[@]}"; do
 for lengthscale in "${lengthscales[@]}"; do
-for seed in "${seeds[@]}"; do
 for variant in "${variants[@]}"; do
     read -r method extra_flags <<< "$variant"
-    # skip invalid method-target_fn combinations
-    if [[ "$method" == "vellanky" && "$target_fn" =~ ^(ackley|hartmann|rosenbrock|pendulum)$ ]]; then
+    if [[ "$method" == "vellanky" && "$target_fn" =~ ^($multidim_fns)$ ]]; then
         continue
     fi
-    # determine result path based on method and extra flags
+    ALL_COMBOS+=("$target_fn $profile $lengthscale $seed $variant")
+done
+done
+done
+done
+done
+
+variant_to_dir() {
+    local method=$1 extra_flags=${2:-}
     if [[ "$extra_flags" == *"--disable_natural_gradient"* ]]; then
-        dir="${method}_no_natural_grad"
+        echo "${method}_no_natural_grad"
     elif [[ "$extra_flags" == *"--sample_candidates_from_gp"* ]]; then
-        dir="${method}_sample_from_gp"
+        echo "${method}_sample_from_gp"
     elif [[ "$extra_flags" == *"--reduced_grid"* ]]; then
-        dir="${method}_reduced_grid"
+        echo "${method}_reduced_grid"
     else
-        dir=$method
+        echo "$method"
     fi
-    result="results/${target_fn}/${dir}/${profile}_lengthscale_${lengthscale}/seed_${seed}.pkl"
-    # only add to combos if result doesn't exist unless --force_rerun 
-    if $force_rerun || [[ ! -e "$result" ]]; then
-        combos+=("$profile $lengthscale $seed $variant")
+}
+
+submit_sweep() {
+    local target_fn=$1 memory=$2 time=$3
+
+    local combos=()
+    for entry in "${ALL_COMBOS[@]}"; do
+        [[ "${entry%% *}" != "$target_fn" ]] && continue
+        read -r _ profile lengthscale seed method extra_flags <<< "$entry"
+        local dir result
+        dir=$(variant_to_dir "$method" "$extra_flags")
+        result="results/${target_fn}/${dir}/${profile}_lengthscale_${lengthscale}/seed_${seed}.pkl"
+        if [[ ! -e "$result" ]]; then
+            combos+=("$profile $lengthscale $seed $method${extra_flags:+ $extra_flags}")
+            [[ ${#combos[@]} -ge $MAX_JOBS_PER_SUBMISSION ]] && break 
+        fi
+    done
+
+    local n=${#combos[@]}
+    if [[ $n -eq 0 ]]; then
+        echo "[$(date)] $target_fn: all results exist, skipping" >> "$LOG"
+        return
     fi
-done
-done
-done
-done
 
-n=${#combos[@]}
-if [[ $n -eq 0 ]]; then
-    echo "All results already exist, nothing to do!"
-    exit 0
-fi
-echo "Submitting $n jobs..."
+    echo "[$(date)] $target_fn: submitting $n jobs" | tee -a "$LOG"
+    mkdir -p logs/
 
-mkdir -p logs/
-
-sbatch --job-name="sweep_${target_fn}" <<EOF
+    sbatch --job-name="sweep_${target_fn}" <<EOF >> "$LOG" 2>&1
 #!/usr/bin/env bash
 #SBATCH --output=logs/${target_fn}_%A/%a.out
 #SBATCH --array=0-$((n - 1))
@@ -86,20 +105,40 @@ sbatch --job-name="sweep_${target_fn}" <<EOF
 
 combos=($(printf '"%s" ' "${combos[@]}"))
 
-# combo format: "profile lengthscale seed method [extra_flags...]"
 read -r profile lengthscale seed method extra_flags <<< "\${combos[\$SLURM_ARRAY_TASK_ID]}"
 
-PYTHONUNBUFFERED=1 uv run run.py \\
-    --method=\$method \\
-    --profile=\$profile \\
-    --target_fn=${target_fn} \\
-    --lengthscale=\$lengthscale \\
-    --seed=\$seed \\
-    --initial_acquisitions=10 \\
-    --minimum_k=1 \\
-    --maximum_k=10 \\
-    --acquisitions_each_k=10 \\
-    --acquisition_raw_samples=1024 \\
-    --acquisition_max_restarts=16 \\
+uv run run.py \
+    --method=\$method \
+    --profile=\$profile \
+    --target_fn=${target_fn} \
+    --lengthscale=\$lengthscale \
+    --seed=\$seed \
+    --initial_acquisitions=10 \
+    --minimum_k=1 \
+    --maximum_k=10 \
+    --acquisitions_each_k=10 \
+    --acquisition_raw_samples=1024 \
+    --acquisition_max_restarts=16 \
     \$extra_flags
 EOF
+}
+
+while true; do
+    if (( $(date +%s) >= DEADLINE )); then
+        echo "[$(date)] ${deadline_hours}h elapsed, exiting." | tee -a "$LOG"
+        exit 0
+    fi
+
+    ACTIVE=$(squeue --me --format="%j" --states=RUNNING,PENDING,COMPLETING 2>/dev/null)
+
+    for target_fn in "${!SWEEP_RESOURCES[@]}"; do
+        if echo "$ACTIVE" | grep -qF "sweep_${target_fn}"; then
+            echo "[$(date)] $target_fn: active, skipping" >> "$LOG"
+        else
+            read -r memory time <<< "${SWEEP_RESOURCES[$target_fn]}"
+            submit_sweep "$target_fn" "$memory" "$time"
+        fi
+    done
+
+    sleep 600
+done

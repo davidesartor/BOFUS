@@ -1,15 +1,7 @@
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.lines as mlines
 import numpy as np
-import joblib
-
-
-def plot_times(ax, times: np.ndarray, position: int):
-    ax.boxplot(times, positions=[position], patch_artist=True)
-    ax.set_ylabel(f"Time (seconds)")
-    ax.grid(True)
 
 
 def plot_ys(ax, ys: np.ndarray, style: dict):
@@ -24,121 +16,103 @@ def plot_ys(ax, ys: np.ndarray, style: dict):
     ax.fill_between(x, ll, ul, alpha=0.2, color=ax.lines[-1].get_color())
 
 
-def plot(
-    target_fn: str,
-    lengthscale: float,
-    methods: list[str],
-    profiles: list[str],
-    savepath: str,
-):
-    print(f"Plotting results for {target_fn} (lengthscale {lengthscale})")
-    colors = plt.cm.tab10.colors
-    linestyles = ["-", "--", ":", "-."]
+def filter_and_rename_methods(
+    df: pd.DataFrame, methods: dict[str, str]
+) -> pd.DataFrame:
+    # filters method column by dict and renames according to dict values
+    dfs = []
+    for method, new_method in methods.items():
+        df_method = df[df["method"] == method]
+        df_method["method"] = new_method
+        dfs.append(df_method)
+    return pd.concat(dfs, ignore_index=True)
 
-    fig, (ax_ys, ax_leg) = plt.subplots(
-        1, 2, figsize=(10, 5), gridspec_kw={"width_ratios": [3, 1]}
-    )
 
-    for i, (method, color) in enumerate(zip(methods, colors)):
-        for profile, linestyle in zip(profiles, linestyles):
+def plot_running_best(df: pd.DataFrame, save_dir: str, methods: dict[str, str]):
+    os.makedirs(save_dir, exist_ok=True)
+    df = filter_and_rename_methods(df, methods)
 
-            save_dir = (
-                f"results/{method}/{profile}/{target_fn}/lengthscale_{lengthscale}/"
-            )
-            try:
-                results = [
-                    np.load(os.path.join(save_dir, f), allow_pickle=True)
-                    for f in os.listdir(save_dir)
-                    if f.endswith(".pkl")
-                ]
-            except FileNotFoundError:
-                print(f"Directory not found: {save_dir}")
-                continue
-            ys = np.array([r["observation_values"] for r in results])
-            plot_ys(ax_ys, ys, style={"linestyle": linestyle, "color": color})
+    for target_fn in df["target_fn"].unique():
+        df_targ = df[df["target_fn"] == target_fn]
+        assert len(df_targ["profile"].unique()) == 1, "Expected only one profile"
+        assert len(df_targ["lengthscale"].unique()) == 1, "Expected only one scale"
+        profile = df_targ["profile"].iloc[0]
+        lengthscale = df_targ["lengthscale"].iloc[0]
 
-    ax_ys.set(title="Target function", ylabel="Target", xlabel="Acquisitions")
-    ax_ys.grid(True)
-    ax_ys.set_yscale("log")
+        fig = plt.figure(figsize=(8, 6))
+        for method in df_targ["method"].unique():
+            df_method = df_targ[df_targ["method"] == method]
+            ys = [
+                df_method[df_method["i"] == i]["y"].values
+                for i in sorted(df_method["i"].unique())
+            ]
+            ys = np.stack(ys, axis=1)  # shape (runs, acquisitions)
+            plot_ys(plt.gca(), ys, style={"label": method})
 
-    method_handles = [
-        mlines.Line2D([], [], color=colors[i], linewidth=2, label=method)
-        for i, method in enumerate(methods)
-    ]
-    profile_handles = [
-        mlines.Line2D(
-            [], [], color="black", linestyle=linestyles[i], linewidth=2, label=profile
-        )
-        for i, profile in enumerate(profiles)
-    ]
-    ax_leg.axis("off")
-    ax_leg.legend(
-        handles=method_handles
-        + [mlines.Line2D([], [], color="none", label="")]
-        + profile_handles,
-        loc="center left",
-        frameon=True,
-        title="Method / Kernel",
-    )
-
-    fig.suptitle(f"{target_fn} ($\\rho={lengthscale}$)")
-    fig.tight_layout()
-
-    os.makedirs(f"plots/{target_fn}", exist_ok=True)
-    fig.savefig(savepath, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Done!\n")
+        plt.title(f"{target_fn} (profile={profile}, lengthscale={lengthscale})")
+        plt.xlabel("Acquisitions")
+        plt.ylabel("Best y")
+        # scale escluding random initial acquisitions to avoid skewing the plot
+        ys_excl_first_10 = df_targ[df_targ["i"] >= 10]["y"].values      
+        y_min = ys_excl_first_10.min()
+        y_max = ys_excl_first_10.max()
+        plt.ylim(y_min * 0.9, y_max * 1.1)
+        plt.yscale("log")
+        plt.legend()
+        plt.savefig(f"{save_dir}/{target_fn}.pdf")
+        plt.close()
 
 
 if __name__ == "__main__":
     # find the best combination of profile/lengthscale for each target function
     summary = pd.read_csv("results_summary.csv")
-    best_combos = summary.groupby("target_fn").apply(lambda df: df.loc[df["best_y"].idxmin()]).reset_index()
-    best_combos = best_combos[["target_fn", "profile", "lengthscale"]]
+    # exclude vellanky since it is invariant to lengthscale
+    summary = summary[summary["method"] != "vellanky"]
+    best_combos = summary.loc[
+        summary.groupby("target_fn")["best_y"].idxmin(),
+        ["target_fn", "profile", "lengthscale"],
+    ]
 
-    for target_fn, best_profile, 
-
+    # filter the ys to only include the best combinations
     ys = pd.read_csv("results_ys.csv")
-    print(ys)
+    ys = ys.merge(best_combos, on=["target_fn", "profile", "lengthscale"])
 
+    ################################################################################
+    # NATURAL GRADIENT ABLATIONS
+    for method in ["wycoff", "vien"]:
+        plot_running_best(
+            df=ys,
+            save_dir=f"plots/natural_gradient_ablation_{method}",
+            methods={
+                f"{method}": f"natural gradient",
+                f"{method}_no_natural_grad": f"vanilla gradient",
+            },
+        )
 
+    ################################################################################
+    # CANDIDATES SAMPLING ABLATIONS
+    plot_running_best(
+        df=ys,
+        save_dir=f"plots/candidates_sampling_ablation",
+        methods={
+            f"wycoff": f"wycoff",
+            f"wycoff_sample_from_gp": f"wycoff (sample from GP)",
+            f"shilton": f"shilton",
+        },
+    )
 
-
-    # methods = ["wycoff", "kundu", "vien", "shilton", "vellanky"]
-    # joblib.Parallel(n_jobs=-1)(
-    #     joblib.delayed(plot)(
-    #         target_fn,
-    #         lengthscale,
-    #         methods,
-    #         profiles,
-    #         f"plots/{target_fn}/lengthscale_{lengthscale}.pdf",
-    #     )
-    #     for target_fn in targets
-    #     for lengthscale in lengthscales
-    # )
-
-    # methods = ["wycoff", "wycoff_no_natural_grad", "vien", "vien_no_natural_grad"]
-    # joblib.Parallel(n_jobs=-1)(
-    #     joblib.delayed(plot)(
-    #         target_fn,
-    #         lengthscale,
-    #         methods,
-    #         profiles,
-    #         f"plots/{target_fn}/lengthscale_{lengthscale}_gradient_ablation.pdf",
-    #     )
-    #     for target_fn in targets
-    #     for lengthscale in lengthscales
-    # )
-
-    # methods = ["wycoff", "wycoff_sample_from_gp", "shilton"]
-    # joblib.Parallel(n_jobs=-1)(
-    #     joblib.delayed(plot)(
-    #         target_fn,
-    #         lengthscale,
-    #         methods,
-    #         profiles,
-    #         f"plots/{target_fn}/lengthscale_{lengthscale}_sampling_ablation.pdf",
-    #     )
-    #     for target_fn in targets
-    #     for lengthscale in lengthscales
-    # )
+    ################################################################################
+    # METHOD COMPARISON
+    plot_running_best(
+        df=ys,
+        save_dir="plots/method_comparison",
+        methods={
+            "wycoff": "wycoff",
+            "wycoff_no_natural_grad": "wycoff (vanilla)",
+            "kundu": "kundu",
+            "vien": "vien",
+            "vien_no_natural_grad": "vien (vanilla)",
+            "shilton": "shilton",
+            "vellanky": "vellanky",
+        },
+    )

@@ -12,10 +12,13 @@ def fit_table(
     groups_col="group",
     verbose=False,
 ):
+    methods_names = list(df.method.unique())
+    if reference and reference not in methods_names:
+        reference = None
     rows = {}
     for outcome in outcomes:
         formula = (
-            f"{outcome} ~ C(method, Treatment(reference='{reference}'))"
+            f"{outcome} ~ C(method, Treatment(reference='{reference}'))*{groups_col}"
             if reference
             else f"{outcome} ~ method - 1"  # this disables the intercept
         )
@@ -41,6 +44,7 @@ def fit_table(
     else:
         tbl.index = tbl.index.str.removeprefix("method[")
     tbl.index = tbl.index.str.removesuffix("]")
+    tbl = tbl.loc[methods_names]
     return tbl
 
 
@@ -70,7 +74,7 @@ if __name__ == "__main__":
     sub = sub.replace("vien_no_natural_grad", "vien")
 
     # only show the methods we care about
-    methods = ["random", "wycoff", "vien", "vellanky", "shilton", "kundu"]
+    methods = ["wycoff", "vien", "vellanky", "shilton", "kundu"]
     sub = sub[sub["method"].isin(methods)]
     print(fit_table(sub, outcomes, method=args.method, verbose=args.verbose))
     print("========================================")
@@ -85,7 +89,6 @@ if __name__ == "__main__":
     print("========================================")
     # only show the methods we care about
     methods = [
-        "random",
         "wycoff",
         "wycoff_no_natural_grad",
         "vien",

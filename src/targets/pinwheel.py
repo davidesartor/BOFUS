@@ -72,8 +72,12 @@ class PinWheel(TestFunction):
 
     def __call__(self, f: Callable[[Float[Array, "d"]], Scalar]) -> Scalar:
         q1 = lambda t: f(jnp.array([t / self.simulation_time]))
-        sol, theta_final, omega_final = self.simulate(q1_ref=q1)
-        return 2 * (1 - jnp.cos(theta_final - self.target_angle))
+        try:
+            sol, theta_final, omega_final = self.simulate(q1_ref=q1)
+            return 2 * (1 - jnp.cos(theta_final - self.target_angle))
+        except Exception as e:
+            print(f"Simulation failed: {e}")
+            return jnp.array(4.0)  # worst case cost if simulation fails
 
     def simulate(
         self,

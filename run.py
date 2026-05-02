@@ -39,7 +39,7 @@ def run_random(
 
     print("Sampling initial acquisition...")
     timer = time.time()
-    k = maximum_k
+    k = minimum_k
     candidate_sampler = sp.stats.qmc.LatinHypercube(d=k * (kernel.d + 1), rng=rng)
     ps = candidate_sampler.random(n=initial_acquisitions)
     fs = [rkhs.Function.from_array(kernel, p.reshape(k, kernel.d + 1)) for p in ps]
@@ -129,7 +129,7 @@ def run_wycoff(
 
     print("Sampling initial acquisition...")
     timer = time.time()
-    k = maximum_k
+    k = minimum_k
     candidate_sampler = sp.stats.qmc.LatinHypercube(d=k * (kernel.d + 1), rng=rng)
     grid_sampler = sp.stats.qmc.LatinHypercube(d=kernel.d, rng=rng)
     if sample_candidates_from_gp:
