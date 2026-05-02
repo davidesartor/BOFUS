@@ -6,7 +6,7 @@
 # bash sweep.sh rosenbrock 4G 2:00:00
 # bash sweep.sh pendulum 8G 4:00:00
 # bash sweep.sh pinwheel 8G 4:00:00
-# bash sweep.sh brachistocrone 4G 4:00:00
+# bash sweep.sh brachistochrone 4G 4:00:00
 # bash sweep.sh mnist 30G 8:00:00
 
 target_fn=${1:?Usage: bash $0 <target_fn> <memory> <time> [--force_rerun]}
@@ -55,7 +55,7 @@ for variant in "${variants[@]}"; do
     else
         dir=$method
     fi
-    result="results/${dir}/${profile}/${target_fn}/lengthscale_${lengthscale}/seed_${seed}.pkl"
+    result="results/${target_fn}/${dir}/${profile}_lengthscale_${lengthscale}/seed_${seed}.pkl"
     # only add to combos if result doesn't exist unless --force_rerun 
     if $force_rerun || [[ ! -e "$result" ]]; then
         combos+=("$profile $lengthscale $seed $variant")

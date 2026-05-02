@@ -1,4 +1,5 @@
 import os
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import numpy as np
@@ -40,6 +41,7 @@ def plot(
 
     for i, (method, color) in enumerate(zip(methods, colors)):
         for profile, linestyle in zip(profiles, linestyles):
+
             save_dir = (
                 f"results/{method}/{profile}/{target_fn}/lengthscale_{lengthscale}/"
             )
@@ -89,54 +91,54 @@ def plot(
 
 
 if __name__ == "__main__":
-    profiles = ["rbf", "matern52", "matern32"]
-    targets = [
-        "sinc",
-        "gramacylee",
-        "rosenbrock",
-        "ackley",
-        "hartmann",
-        "pendulum",
-        "mnist",
-        "pinwheel",
-    ]
-    lengthscales = [0.3, 0.1, 0.03]
+    # find the best combination of profile/lengthscale for each target function
+    summary = pd.read_csv("results_summary.csv")
+    best_combos = summary.groupby("target_fn").apply(lambda df: df.loc[df["best_y"].idxmin()]).reset_index()
+    best_combos = best_combos[["target_fn", "profile", "lengthscale"]]
 
-    methods = ["wycoff", "kundu", "vien", "shilton", "vellanky", "random"]
-    joblib.Parallel(n_jobs=-1)(
-        joblib.delayed(plot)(
-            target_fn,
-            lengthscale,
-            methods,
-            profiles,
-            f"plots/{target_fn}/lengthscale_{lengthscale}.pdf",
-        )
-        for lengthscale in lengthscales
-        for target_fn in targets
-    )
+    for target_fn, best_profile, 
 
-    methods = ["wycoff", "wycoff_no_natural_grad", "vien", "vien_no_natural_grad"]
-    joblib.Parallel(n_jobs=-1)(
-        joblib.delayed(plot)(
-            target_fn,
-            lengthscale,
-            methods,
-            profiles,
-            f"plots/{target_fn}/lengthscale_{lengthscale}_gradient_ablation.pdf",
-        )
-        for lengthscale in lengthscales
-        for target_fn in targets
-    )
+    ys = pd.read_csv("results_ys.csv")
+    print(ys)
 
-    methods = ["wycoff", "wycoff_sample_from_gp", "shilton"]
-    joblib.Parallel(n_jobs=-1)(
-        joblib.delayed(plot)(
-            target_fn,
-            lengthscale,
-            methods,
-            profiles,
-            f"plots/{target_fn}/lengthscale_{lengthscale}_sampling_ablation.pdf",
-        )
-        for lengthscale in lengthscales
-        for target_fn in targets
-    )
+
+
+
+    # methods = ["wycoff", "kundu", "vien", "shilton", "vellanky"]
+    # joblib.Parallel(n_jobs=-1)(
+    #     joblib.delayed(plot)(
+    #         target_fn,
+    #         lengthscale,
+    #         methods,
+    #         profiles,
+    #         f"plots/{target_fn}/lengthscale_{lengthscale}.pdf",
+    #     )
+    #     for target_fn in targets
+    #     for lengthscale in lengthscales
+    # )
+
+    # methods = ["wycoff", "wycoff_no_natural_grad", "vien", "vien_no_natural_grad"]
+    # joblib.Parallel(n_jobs=-1)(
+    #     joblib.delayed(plot)(
+    #         target_fn,
+    #         lengthscale,
+    #         methods,
+    #         profiles,
+    #         f"plots/{target_fn}/lengthscale_{lengthscale}_gradient_ablation.pdf",
+    #     )
+    #     for target_fn in targets
+    #     for lengthscale in lengthscales
+    # )
+
+    # methods = ["wycoff", "wycoff_sample_from_gp", "shilton"]
+    # joblib.Parallel(n_jobs=-1)(
+    #     joblib.delayed(plot)(
+    #         target_fn,
+    #         lengthscale,
+    #         methods,
+    #         profiles,
+    #         f"plots/{target_fn}/lengthscale_{lengthscale}_sampling_ablation.pdf",
+    #     )
+    #     for target_fn in targets
+    #     for lengthscale in lengthscales
+    # )

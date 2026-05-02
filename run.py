@@ -133,7 +133,9 @@ def run_wycoff(
     candidate_sampler = sp.stats.qmc.LatinHypercube(d=k * (kernel.d + 1), rng=rng)
     grid_sampler = sp.stats.qmc.LatinHypercube(d=kernel.d, rng=rng)
     if sample_candidates_from_gp:
-        ps = [sample_from_gp_prior(k, grid_sampler) for _ in range(initial_acquisitions)]
+        ps = [
+            sample_from_gp_prior(k, grid_sampler) for _ in range(initial_acquisitions)
+        ]
     else:
         ps = candidate_sampler.random(n=initial_acquisitions)
     fs = [rkhs.Function.from_array(kernel, p.reshape(k, kernel.d + 1)) for p in ps]
@@ -178,7 +180,10 @@ def run_wycoff(
             print(f"Optimizing acquisition function...")
             timer = time.time()
             if sample_candidates_from_gp:
-                ps = [sample_from_gp_prior(k, grid_sampler) for _ in range(acquisition_raw_samples)]
+                ps = [
+                    sample_from_gp_prior(k, grid_sampler)
+                    for _ in range(acquisition_raw_samples)
+                ]
             else:
                 ps = candidate_sampler.random(n=acquisition_raw_samples)
             p, _ = acquisition.optimize_lhs_candidates(
@@ -457,7 +462,7 @@ def run_vien(
         f1 = rkhs.Function.from_xy(kernel, x=x, y=y1)
         f2 = rkhs.Function.from_xy(kernel, x=x, y=y2)
         return f1.a @ kernel(f1.x, f2.x) @ f2.a
-    
+
     @eqx.filter_jit
     def sparsify(f: rkhs.Function, k: int) -> rkhs.Function:
         """Sparsify using Kernel Matching Pursuit (Vincent & Bengio 2002)"""
@@ -517,7 +522,10 @@ def run_vien(
             all_xs = jnp.unique(jnp.concat([f.x for f in fs]), axis=0)
             a0 = [jnp.concat([fi.a, jnp.zeros(len(all_xs))]) for fi in candidate_fs]
             x0 = [jnp.concat([fi.x, all_xs]) for fi in candidate_fs]
-            y0 = [jax.vmap(rkhs.Function(kernel, x=xi, a=ai))(xi) for xi, ai in zip(x0, a0)]
+            y0 = [
+                jax.vmap(rkhs.Function(kernel, x=xi, a=ai))(xi)
+                for xi, ai in zip(x0, a0)
+            ]
             y0 = [jsp.special.expit(2 * yi) for yi in y0]  # squash to [0, 1]
             acquisition_time += time.time() - timer
             print(f"Done! (total acquisition time: {acquisition_time:.2f}s)\n")
@@ -716,8 +724,9 @@ if __name__ == "__main__":
             "ackley",
             "hartmann",
             "pendulum",
-            "mnist",
             "pinwheel",
+            "brachistochrone",
+            "mnist",
         ],
     )
     parser.add_argument("--lengthscale", type=float, required=True)
@@ -746,8 +755,9 @@ if __name__ == "__main__":
         "hartmann": lambda: targets.Ridge(targets.virtual_library.Hartmann3(), d=3),
         "rosenbrock": lambda: targets.Ridge(targets.virtual_library.Rosenbrock(), d=4),
         "pendulum": targets.Pendulum,
-        "mnist": targets.MNIST,
         "pinwheel": targets.PinWheel,
+        "brachistochrone": targets.Brachistochrone,
+        "mnist": targets.MNIST,
     }[args.target_fn]()
     kernel = rkhs.RKHS(
         metric=kernels.Euclidean(),
@@ -797,13 +807,14 @@ if __name__ == "__main__":
     )
 
     # save results
-    save_dir = f"results/{args.method}/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}"
+    save_dir = f"results/{args.target_fn}/{args.method}"
     if args.disable_natural_gradient:
-        save_dir = f"results/{args.method}_no_natural_grad/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}"
+        save_dir += f"_no_natural_grad"
     if args.sample_candidates_from_gp:
-        save_dir = f"results/{args.method}_sample_from_gp/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}"
+        save_dir += f"_sample_from_gp"
     if args.reduced_grid:
-        save_dir = f"results/{args.method}_reduced_grid/{args.profile}/{args.target_fn}/lengthscale_{args.lengthscale}"
+        save_dir += f"_reduced_grid"
+    save_dir += f"/{args.profile}_lengthscale_{args.lengthscale}"
     os.makedirs(save_dir, exist_ok=True)
     save_path = f"{save_dir}/seed_{args.seed}"
     pickle.dump(results, open(f"{save_path}.pkl", "wb"))
