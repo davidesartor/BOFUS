@@ -48,6 +48,7 @@ class PinWheel(TestFunction):
         robot_arm_masses: tuple[float, float] = (2.0, 1.5),
         pinwheel_arm_length: float = 0.5,
         pinwheel_arm_mass: float = 5.0,
+        pinwheel_damping: float = 3.9,
         pivot: tuple[float, float] = (1.2, 0.0),
         damping_ratio: float = 0.1,
         contact_penalty_stiffness: float = 1e6,
@@ -60,7 +61,8 @@ class PinWheel(TestFunction):
         self.m1, self.m2 = robot_arm_masses
         self.Lp = pinwheel_arm_length
         self.mp = pinwheel_arm_mass
-        self.pivot = np.array(pivot, dtype=float)
+        self.dp = pinwheel_damping
+        self.pivot = jnp.array(pivot, dtype=float)
         self.dr = damping_ratio
         self.kc = contact_penalty_stiffness
         self.dc = d_contact
@@ -69,7 +71,7 @@ class PinWheel(TestFunction):
         self.target_angle = target_angle
 
     def __call__(self, f: Callable[[Float[Array, "d"]], Scalar]) -> Scalar:
-        q1 = lambda t: f(jnp.array([t/self.simulation_time]))
+        q1 = lambda t: f(jnp.array([t / self.simulation_time]))
         sol, theta_final, omega_final = self.simulate(q1_ref=q1)
         return 2 * (1 - jnp.cos(theta_final - self.target_angle))
 
@@ -80,119 +82,157 @@ class PinWheel(TestFunction):
         q1_ref=lambda t: 0.0,  # reference trajectory for joint 1
         q2_ref=lambda t: 0.0,  # reference trajectory for joint 2
     ):
-        Ip = (1 / 3) * self.mp * self.Lp**2  # pinwheel MOI about pivot
-
         def dynamics(t, x):
-            q1, q2, thp, q1d, q2d, thpd = x
+            q1, q2, th, dq1, dq2, dth = x
 
-            # Arm mass matrix
-            c2, s2 = np.cos(q2), np.sin(q2)
-            M11 = (1 / 3) * self.m1 * self.L1**2 + self.m2 * (
-                self.L1**2 + (1 / 3) * self.L2**2 + self.L1 * self.L2 * c2
+            # ── unit vectors ──────────────────────────────────────────────
+            a12 = q1 + q2
+
+            u1 = jnp.array([jnp.cos(q1), jnp.sin(q1)])
+            u12 = jnp.array([jnp.cos(a12), jnp.sin(a12)])
+            up = jnp.array([jnp.cos(th), jnp.sin(th)])
+            u1p = jnp.array([-jnp.sin(q1), jnp.cos(q1)])  # perp link 1
+            u12p = jnp.array([-jnp.sin(a12), jnp.cos(a12)])  # perp link 2
+            upp = jnp.array([-jnp.sin(th), jnp.cos(th)])  # perp pinwheel
+
+            # ── positions ─────────────────────────────────────────────────
+            P1 = self.L1 * u1
+            Q = self.pivot
+
+            # ── robot dynamics ────────────────────────────────────────────
+            c2 = u1 @ u12
+            s2 = jnp.cross(u1, u12)
+
+            M11 = (self.m1 / 3 + self.m2) * self.L1**2 + self.m2 * (
+                self.L2**2 / 3 + self.L1 * self.L2 * c2
             )
-            M12 = self.m2 * ((1 / 3) * self.L2**2 + 0.5 * self.L1 * self.L2 * c2)
-            M22 = (1 / 3) * self.m2 * self.L2**2
-            M = np.array([[M11, M12], [M12, M22]])
+            M12 = self.m2 * (self.L2**2 / 3 + self.L1 * self.L2 * c2 / 2)
+            M22 = self.m2 * self.L2**2 / 3
+            M = jnp.array([[M11, M12], [M12, M22]])
 
-            # Coriolis
-            h = 0.5 * self.m2 * self.L1 * self.L2 * s2
-            C = np.array([[-h * q2d, -h * (q1d + q2d)], [h * q1d, 0.0]])
+            h = self.m2 * self.L1 * self.L2 * s2 / 2
+            C = jnp.array([[-h * dq2, -h * (dq1 + dq2)], [h * dq1, 0.0]])
 
-            # Impedance torques
             K1t, K2t = K1(t), K2(t)
-            tau = np.array(
+            tau = jnp.array(
                 [
-                    K1t * (q1_ref(t) - q1) - self.dr * K1t * q1d,
-                    K2t * (q2_ref(t) - q2) - self.dr * K2t * q2d,
+                    K1t * ((q1_ref(t) - q1) - self.dr * dq1),
+                    K2t * ((q2_ref(t) - q2) - self.dr * dq2),
                 ]
             )
 
-            # Geometry
-            p0 = np.zeros(2)
-            p1 = self.L1 * np.array([np.cos(q1), np.sin(q1)])
-            p2 = p1 + self.L2 * np.array([np.cos(q1 + q2), np.sin(q1 + q2)])
-            pw0 = self.pivot
-            pw1 = self.pivot + self.Lp * np.array([np.cos(thp), np.sin(thp)])
+            # ── closest point on link 2 to pinwheel ───────────────────────
+            d = Q - P1
+            cu = (d @ u12) / self.L2
+            cup = (d @ up) / self.Lp
+            cosa = u12 @ up
+            sin2 = 1.0 - cosa**2
 
-            # Contact forces
-            tau_arm, tau_pw = np.zeros(2), 0.0
-            for link, (A, B) in enumerate([(p0, p1), (p1, p2)], start=1):
-                ta, sp, d, ptA, ptP = self.seg_closest(A, B, pw0, pw1)
-                if 1e-10 < d < self.cr:
-                    da, dp = self.contact_gen_forces(
-                        ta, sp, d, ptA, ptP, q1, q2, q1d, q2d, thp, thpd, link
-                    )
-                    tau_arm += da
-                    tau_pw += dp
+            t2 = jnp.clip(
+                jnp.where(sin2 > 1e-10, (cu - cup * cosa) / sin2, 0.0), 0.0, 1.0
+            )
+            s = jnp.clip((t2 * self.L2 * cosa / self.Lp) - cup, 0.0, 1.0)
+            t2 = jnp.clip((d @ u12 + s * self.Lp * cosa) / self.L2, 0.0, 1.0)
 
-            qdd = np.linalg.solve(M, tau + tau_arm - C @ np.array([q1d, q2d]))
-            thpdd = tau_pw / Ip - 3.9 * thpd
+            ptL = P1 + t2 * self.L2 * u12
+            ptP = Q + s * self.Lp * up
+            gap = ptL - ptP
+            dist = jnp.linalg.norm(gap)
 
-            return [q1d, q2d, thpd, qdd[0], qdd[1], thpdd]
+            # ── contact force on link 2 ───────────────────────────────────
+            n = gap / jnp.maximum(dist, 1e-12)
+            pen = self.cr - dist
+            Jv1 = self.L1 * u1p + t2 * self.L2 * u12p  # d(ptL)/d(dq1)
+            Jv2 = t2 * self.L2 * u12p  # d(ptL)/d(dq2)
+            v_link = Jv1 * dq1 + Jv2 * dq2
+            v_pw = s * self.Lp * upp * dth
+            vn = (v_link - v_pw) @ n
+
+            F_mag = jnp.maximum(0.0, self.kc * pen - self.dc * vn)
+            F = jnp.where((dist > 1e-10) & (dist < self.cr), F_mag * n, jnp.zeros(2))
+
+            tau_arm = jnp.array([Jv1 @ F, Jv2 @ F])
+            tau_pw = -(s * self.Lp * upp) @ F
+
+            # ── equations of motion ───────────────────────────────────────
+            Ip = self.mp * self.Lp**2 / 3
+            ddq = jnp.linalg.solve(M, tau + tau_arm - C @ jnp.array([dq1, dq2]))
+            ddth = tau_pw / Ip - self.dp * dth
+
+            return jnp.array([dq1, dq2, dth, ddq[0], ddq[1], ddth])
 
         # Initial state: arm at reference, pinwheel at pi with zero velocity
-        x0 = [q1_ref(0), q2_ref(0), np.pi, 0.0, 0.0, 0.0]
-
         sol = sp.integrate.solve_ivp(
-            dynamics,
-            [0, self.simulation_time],
-            x0,
+            fun=jax.jit(dynamics),
+            t_span=[0, self.simulation_time],
+            y0=[q1_ref(0), q2_ref(0), jnp.pi, 0.0, 0.0, 0.0],
             method="Radau",
             rtol=1e-8,
             atol=1e-10,
             max_step=5e-4,
         )
-
-        theta_final = sol.y[2, -1]
-        omega_final = sol.y[5, -1]
+        _, _, theta_final, _, _, omega_final = sol.y[:, -1]
         return sol, theta_final, omega_final
 
-    @staticmethod
-    def seg_closest(A, B, C, D):
-        """Closest points between 2D segments AB and CD."""
-        d1, d2, r = B - A, D - C, A - C
-        a, e, f = d1 @ d1, d2 @ d2, d2 @ r
-
-        if a < 1e-12 and e < 1e-12:
-            t = s = 0.0
-        elif a < 1e-12:
-            t, s = 0.0, np.clip(f / e, 0, 1)
-        elif e < 1e-12:
-            t, s = np.clip(-(d1 @ r) / a, 0, 1), 0.0
-        else:
-            b, c_ = d1 @ d2, d1 @ r
-            den = a * e - b * b
-            t = np.clip((b * f - c_ * e) / den, 0, 1) if den > 1e-12 else 0.0
-            s = (b * t + f) / e
-            if s < 0:
-                t, s = np.clip(-c_ / a, 0, 1), 0.0
-            elif s > 1:
-                t, s = np.clip((b - c_) / a, 0, 1), 1.0
-
-        ptA, ptB = A + t * d1, C + s * d2
-        return t, s, np.linalg.norm(ptA - ptB), ptA, ptB
-
-    def contact_gen_forces(
-        self, ta, sp, d, ptA, ptP, q1, q2, q1d, q2d, thp, thpd, link
+    def animate(
+        self, f: Callable[[Float[Array, "d"]], Scalar], filename="pinwheel.gif", fps=30
     ):
-        """Compute generalized contact forces on arm joints and pinwheel."""
-        n = (ptA - ptP) / d
-        pen = self.cr - d
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import FuncAnimation
 
-        e1 = np.array([-np.sin(q1), np.cos(q1)])
-        ep = np.array([-np.sin(thp), np.cos(thp)])
+        q1_ref = lambda t: f(jnp.array([t / self.simulation_time]))
+        sol, _, _ = self.simulate(q1_ref=q1_ref)
 
-        if link == 1:
-            v_arm = ta * self.L1 * e1 * q1d
-            Ja = np.column_stack([ta * self.L1 * e1, np.zeros(2)])
-        else:
-            e12 = np.array([-np.sin(q1 + q2), np.cos(q1 + q2)])
-            v_arm = self.L1 * e1 * q1d + ta * self.L2 * e12 * (q1d + q2d)
-            Ja = np.column_stack(
-                [self.L1 * e1 + ta * self.L2 * e12, ta * self.L2 * e12]
-            )
+        t = sol.t
+        q1, q2, th = sol.y[0], sol.y[1], sol.y[2]
 
-        vn = (v_arm - sp * self.Lp * ep * thpd) @ n
-        F = max(0.0, self.kc * pen - self.dc * vn) * n
+        t_anim = np.arange(t[0], t[-1], 1 / fps)
+        q1 = np.interp(t_anim, t, q1)
+        q2 = np.interp(t_anim, t, q2)
+        th = np.interp(t_anim, t, th)
 
-        return Ja.T @ F, sp * self.Lp * ep @ (-F)
+        a12 = q1 + q2
+        P0 = np.zeros((len(t_anim), 2))
+        P1 = self.L1 * np.stack([np.cos(q1), np.sin(q1)], axis=1)
+        P2 = P1 + self.L2 * np.stack([np.cos(a12), np.sin(a12)], axis=1)
+        Q0 = np.array(self.pivot)
+        Q1 = Q0 + self.Lp * np.stack([np.cos(th), np.sin(th)], axis=1)
+
+        fig, ax = plt.subplots(figsize=(6, 6))
+        margin = self.L1 + self.L2 + 0.2
+        ax.set_xlim(-margin, margin)
+        ax.set_ylim(-margin, margin)
+        ax.set_aspect("equal")
+        ax.axhline(0, color="0.85", lw=0.5)
+        ax.axvline(0, color="0.85", lw=0.5)
+        ax.plot(*Q0, "k+", ms=8, mew=1.5)
+        # target pinwheel position
+        Q_target = Q0 + self.Lp * np.array(
+            [np.cos(self.target_angle), np.sin(self.target_angle)]
+        )
+        ax.plot(*Q_target, "o", ms=6, color="r", alpha=0.4)
+
+        (link1,) = ax.plot([], [], "o-", lw=3, color="steelblue", ms=6)
+        (link2,) = ax.plot([], [], "o-", lw=3, color="dodgerblue", ms=6)
+        (pin,) = ax.plot([], [], "o-", lw=2.5, color="tomato", ms=5)
+        time_tx = ax.text(0.02, 0.96, "", transform=ax.transAxes, fontsize=9, va="top")
+
+        def update(i):
+            link1.set_data([P0[i, 0], P1[i, 0]], [P0[i, 1], P1[i, 1]])
+            link2.set_data([P1[i, 0], P2[i, 0]], [P1[i, 1], P2[i, 1]])
+            pin.set_data([Q0[0], Q1[i, 0]], [Q0[1], Q1[i, 1]])
+            time_tx.set_text(f"t = {t_anim[i]:.2f} s")
+            return link1, link2, pin, time_tx
+
+        all_x = np.concatenate([P1[:, 0], P2[:, 0], Q1[:, 0], [Q0[0]]])
+        all_y = np.concatenate([P1[:, 1], P2[:, 1], Q1[:, 1], [Q0[1]]])
+        pad = 0.2
+        ax.set_xlim(all_x.min() - pad, all_x.max() + pad)
+        ax.set_ylim(all_y.min() - pad, all_y.max() + pad)
+
+        anim = FuncAnimation(
+            fig, update, frames=len(t_anim), interval=1000 / fps, blit=True
+        )
+        anim.save(filename, writer="pillow", fps=fps)
+        plt.close(fig)
+        return filename

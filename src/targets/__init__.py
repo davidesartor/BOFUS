@@ -45,6 +45,7 @@ class SincProjection:
         return jnp.mean(jnp.square(pred - target))
 
 
-from .neuralnetworks import MNIST
 from .gymnasium import Pendulum
 from .pinwheel import PinWheel
+from .neuralnetworks import MNIST
+from .brachistochrone import Brachistochrone
