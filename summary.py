@@ -6,6 +6,32 @@ from tqdm import tqdm
 import joblib
 
 
+def filter_best_lengthscale(df: pd.DataFrame) -> pd.DataFrame:
+    # best lengthscale per target_fn across all (method, profile)
+    best_lengthscale = (
+        df.groupby(["target_fn", "method", "profile", "lengthscale"])["best_y"]
+        .median()
+        .reset_index()
+        .loc[lambda d: d.groupby("target_fn")["best_y"].idxmin()][
+            ["target_fn", "lengthscale"]
+        ]
+    )
+    return df.merge(best_lengthscale, on=["target_fn", "lengthscale"])
+
+
+def filter_best_profile(df: pd.DataFrame) -> pd.DataFrame:
+    # best profile per (target_fn, method)
+    best_profile = (
+        df.groupby(["target_fn", "method", "profile"])["best_y"]
+        .median()
+        .reset_index()
+        .loc[lambda d: d.groupby(["target_fn", "method"])["best_y"].idxmin()][
+            ["target_fn", "method", "profile"]
+        ]
+    )
+    return df.merge(best_profile, on=["target_fn", "method", "profile"])
+
+
 def read_dir(target_fn, method, profile, lengthscale):
     def read_file(f):
         r = np.load(os.path.join(path, f), allow_pickle=True)
@@ -18,7 +44,7 @@ def read_dir(target_fn, method, profile, lengthscale):
             "t_acq": r["acquisition_time"],
             "t_eval": r["target_evaluation_time"],
         }
-        # dict with y values at each acquisition step 
+        # dict with y values at each acquisition step
         running_best = [{"i": i, "y": yi} for i, yi in enumerate(y)]
         return summary, running_best
 
@@ -59,7 +85,18 @@ if __name__ == "__main__":
     summary_dfs, ys_dfs = zip(*dfs)
 
     summary_df = pd.concat(summary_dfs, ignore_index=True)
-    summary_df.to_csv("results_summary.csv", index=False)
+    summary_df.to_csv("results_summary_all.csv", index=False)
 
     ys_df = pd.concat(ys_dfs, ignore_index=True)
-    ys_df.to_csv("results_ys.csv", index=False)
+    ys_df.to_csv("results_ys_all.csv", index=False)
+
+    # filter to only include best profile and lengthscale for each target_fn and method
+    summary_df = filter_best_lengthscale(summary_df)
+    summary_df = filter_best_profile(summary_df)
+    summary_df.to_csv("results_summary_filtered.csv", index=False)
+
+    ys_df = ys_df.merge(
+        summary_df[["target_fn", "method", "profile", "lengthscale"]].drop_duplicates(),
+        on=["target_fn", "method", "profile", "lengthscale"],
+    )
+    ys_df.to_csv("results_ys_filtered.csv", index=False)

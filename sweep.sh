@@ -9,7 +9,7 @@ declare -A SWEEP_RESOURCES=(
     [pendulum]="8G 4:00:00"
     [pinwheel]="8G 8:00:00"
     [brachistochrone]="4G 4:00:00"
-    [mnist]="30G 8:00:00"
+    [mnist]="30G 12:00:00"
 )
 
 deadline_hours=${1:-72}
@@ -34,14 +34,14 @@ seeds=($(seq 0 15))
 
 LOG="sweep.log"
 DEADLINE=$(( $(date +%s) + deadline_hours * 3600 ))
-MAX_JOBS_PER_SUBMISSION=200
+MAX_JOBS_PER_SUBMISSION=500
 
 echo "[$(date)] Watcher started (PID $$), deadline in ${deadline_hours}h at $(date -d @$DEADLINE)" | tee -a "$LOG"
 
 ALL_COMBOS=()
 for target_fn in "${!SWEEP_RESOURCES[@]}"; do
-for seed in "${seeds[@]}"; do
 for profile in "${profiles[@]}"; do
+for seed in "${seeds[@]}"; do
 for lengthscale in "${lengthscales[@]}"; do
 for variant in "${variants[@]}"; do
     read -r method extra_flags <<< "$variant"

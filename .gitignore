@@ -3,6 +3,7 @@
 *.pkl
 *.csv
 *.pdf
+*.txt
 *tar.gz
 
 
