@@ -40,7 +40,7 @@ class SincProjection:
         self.grid = jr.uniform(jr.key(seed), (n, d))
 
     def __call__(self, f: Callable[[Float[Array, "d"]], Scalar]) -> Scalar:
-        target = jnp.sinc(2 * jnp.pi * self.grid - jnp.pi).prod(axis=-1)
+        target = jnp.sinc(2 * jnp.pi * self.grid - jnp.pi).mean(axis=-1)
         pred = jax.vmap(f)(self.grid)
         return jnp.mean(jnp.square(pred - target))
 

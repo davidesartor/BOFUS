@@ -18,7 +18,10 @@ variants=(
 )
 
 target_fns=(
-    "sinc" 
+    "sinc1d" 
+    "sinc2d" 
+    "sinc3d" 
+    "sinc4d" 
     "gramacylee" 
     "ackley" 
     "hartmann" 
@@ -34,33 +37,37 @@ for target_fn in "${target_fns[@]}"; do
     echo "$target_fn"
     total=0
     for variant in "${variants[@]}"; do
-        missing=0
         for profile in "${profiles[@]}"; do
-        for lengthscale in "${lengthscales[@]}"; do
-        for seed in "${seeds[@]}"; do
-            read -r method extra_flags <<< "$variant"
-            if [[ "$method" == "vellanky" && "$target_fn" =~ ^(ackley|hartmann|rosenbrock|pendulum)$ ]]; then
-                continue
-            fi
-            # determine result path based on method and extra flags
-            if [[ "$extra_flags" == *"--disable_natural_gradient"* ]]; then
-                dir="${method}_no_natural_grad"
-            elif [[ "$extra_flags" == *"--sample_candidates_from_gp"* ]]; then
-                dir="${method}_sample_from_gp"
-            elif [[ "$extra_flags" == *"--reduced_grid"* ]]; then
-                dir="${method}_reduced_grid"
-            else
-                dir=$method
-            fi
-            result="results/${target_fn}/${dir}/${profile}_lengthscale_${lengthscale}/seed_${seed}.pkl"
-            [[ ! -e "$result" ]] && ((missing++))
-        done
-        done
-        done
+            missing=0
+            for lengthscale in "${lengthscales[@]}"; do
+            for seed in "${seeds[@]}"; do
+                # if seed > 15, only consider if profile = matern12
+                if [[ "$seed" -gt 15 && "$profile" != "matern12" ]]; then
+                    continue
+                fi
+                read -r method extra_flags <<< "$variant"
+                if [[ "$method" == "vellanky" && "$target_fn" =~ ^(ackley|hartmann|rosenbrock|pendulum)$ ]]; then
+                    continue
+                fi
+                # determine result path based on method and extra flags
+                if [[ "$extra_flags" == *"--disable_natural_gradient"* ]]; then
+                    dir="${method}_no_natural_grad"
+                elif [[ "$extra_flags" == *"--sample_candidates_from_gp"* ]]; then
+                    dir="${method}_sample_from_gp"
+                elif [[ "$extra_flags" == *"--reduced_grid"* ]]; then
+                    dir="${method}_reduced_grid"
+                else
+                    dir=$method
+                fi
+                result="results/${target_fn}/${dir}/${profile}_lengthscale_${lengthscale}/seed_${seed}.pkl"
+                [[ ! -e "$result" ]] && ((missing++))
+            done
+            done
         if [[ $missing -gt 0 ]]; then
-            echo "      $variant: $missing missing"
+            echo "      $variant $profile: $missing missing"
         fi
         total=$((total + missing))
+        done
     done
     echo "Total missing: $total"
     echo

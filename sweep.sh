@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 
 declare -A SWEEP_RESOURCES=(
-    [sinc]="4G 2:00:00"
+    [sinc1d]="4G 2:00:00"
+    [sinc2d]="4G 2:00:00"
+    [sinc3d]="4G 2:00:00"
+    [sinc4d]="4G 2:00:00"
     [gramacylee]="4G 2:00:00"
     [ackley]="4G 2:00:00"
     [hartmann]="4G 2:00:00"
     [rosenbrock]="4G 2:00:00"
     [pendulum]="8G 4:00:00"
-    [pinwheel]="8G 8:00:00"
+    [pinwheel]="8G 24:00:00"
     [brachistochrone]="4G 4:00:00"
     [mnist]="30G 12:00:00"
 )
@@ -34,7 +37,7 @@ seeds=($(seq 0 15))
 
 LOG="sweep.log"
 DEADLINE=$(( $(date +%s) + deadline_hours * 3600 ))
-MAX_JOBS_PER_SUBMISSION=500
+MAX_JOBS_PER_SUBMISSION=300
 
 echo "[$(date)] Watcher started (PID $$), deadline in ${deadline_hours}h at $(date -d @$DEADLINE)" | tee -a "$LOG"
 

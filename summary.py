@@ -34,10 +34,12 @@ def filter_best_profile(df: pd.DataFrame) -> pd.DataFrame:
 
 def read_dir(target_fn, method, profile, lengthscale):
     def read_file(f):
+        seed = int(f.split("_")[1].split(".")[0])
         r = np.load(os.path.join(path, f), allow_pickle=True)
         y = np.minimum.accumulate(r["observation_values"])
         # dict with summary statistics
         summary = {
+            "seed": seed,
             "best_y": np.min(y),
             "avg_regret": np.mean(y),
             "t_fit": r["surrogate_fit_time"],
@@ -73,6 +75,8 @@ def read_dir(target_fn, method, profile, lengthscale):
 if __name__ == "__main__":
     combos = []
     for target_fn in os.listdir("results/"):
+        if target_fn.endswith(".csv"):
+            continue
         for method in os.listdir(f"results/{target_fn}/"):
             for profile_and_scale in os.listdir(f"results/{target_fn}/{method}/"):
                 profile, _, lengthscale = profile_and_scale.split("_")
@@ -85,18 +89,18 @@ if __name__ == "__main__":
     summary_dfs, ys_dfs = zip(*dfs)
 
     summary_df = pd.concat(summary_dfs, ignore_index=True)
-    summary_df.to_csv("results_summary_all.csv", index=False)
+    summary_df.to_csv("results/summary_all.csv", index=False)
 
     ys_df = pd.concat(ys_dfs, ignore_index=True)
-    ys_df.to_csv("results_ys_all.csv", index=False)
+    ys_df.to_csv("results/ys_all.csv", index=False)
 
     # filter to only include best profile and lengthscale for each target_fn and method
     summary_df = filter_best_lengthscale(summary_df)
     summary_df = filter_best_profile(summary_df)
-    summary_df.to_csv("results_summary_filtered.csv", index=False)
+    summary_df.to_csv("results/summary_filtered.csv", index=False)
 
     ys_df = ys_df.merge(
         summary_df[["target_fn", "method", "profile", "lengthscale"]].drop_duplicates(),
         on=["target_fn", "method", "profile", "lengthscale"],
     )
-    ys_df.to_csv("results_ys_filtered.csv", index=False)
+    ys_df.to_csv("results/ys_filtered.csv", index=False)
