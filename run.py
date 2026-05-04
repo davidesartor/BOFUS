@@ -718,7 +718,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target_fn",
         choices=[
-            "sinc",
+            "sinc1d",
+            "sinc2d",
+            "sinc3d",
+            "sinc4d",
             "gramacylee",
             "rosenbrock",
             "ackley",
@@ -749,7 +752,10 @@ if __name__ == "__main__":
 
     # problem setup
     target_fn = {
-        "sinc": targets.SincProjection,
+        "sinc1d": lambda: targets.SincProjection(d=1),
+        "sinc2d": lambda: targets.SincProjection(d=2),
+        "sinc3d": lambda: targets.SincProjection(d=3),
+        "sinc4d": lambda: targets.SincProjection(d=4),
         "gramacylee": lambda: targets.Ridge(targets.virtual_library.GramacyLee(), d=1),
         "ackley": lambda: targets.Ridge(targets.virtual_library.Ackley(), d=2),
         "hartmann": lambda: targets.Ridge(targets.virtual_library.Hartmann3(), d=3),

@@ -171,9 +171,9 @@ class PinWheel(TestFunction):
             t_span=[0, self.simulation_time],
             y0=[q1_ref(0), q2_ref(0), jnp.pi, 0.0, 0.0, 0.0],
             method="Radau",
-            rtol=1e-8,
-            atol=1e-10,
-            max_step=5e-4,
+            rtol=1e-4,
+            atol=1e-4,
+            max_step=5e-3,
         )
         _, _, theta_final, _, _, omega_final = sol.y[:, -1]
         return sol, theta_final, omega_final
