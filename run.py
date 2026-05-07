@@ -87,7 +87,7 @@ def run_random(
     )
 
 
-def run_wycoff(
+def run_ours(
     seed: int,
     target_fn: targets.TestFunction,
     kernel: rkhs.RKHS,
@@ -713,7 +713,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--method",
-        choices=["random", "wycoff", "vellanky", "vien", "kundu", "shilton"],
+        choices=["random", "ours", "vellanky", "vien", "kundu", "shilton"],
     )
     parser.add_argument(
         "--target_fn",
@@ -780,7 +780,7 @@ if __name__ == "__main__":
     }[args.profile]
     run_simulation_fn, surrogate_model = {
         "random": (run_random, None),
-        "wycoff": (run_wycoff, gp.FunctionalGaussianProcess(profile=profile)),
+        "ours": (run_ours, gp.FunctionalGaussianProcess(profile=profile)),
         "vellanky": (run_vellanky, gp.GaussianProcess(profile=profile)),
         "kundu": (run_kundu, gp.FunctionalGaussianProcess(profile=profile)),
         "vien": (run_vien, gp.FunctionalGaussianProcess(profile=profile)),

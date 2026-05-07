@@ -1,7 +1,7 @@
 [project]
-name = "bofus"
+name = "anon"
 version = "0.1.0"
-description = "Baysian Optimization on Function Spaces"
+description = "Functional Baysian Optimization - NeurIPS 2026"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

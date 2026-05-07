@@ -19,14 +19,14 @@ deadline_hours=${1:-72}
 
 variants=(
     "random"
-    "wycoff"
+    "ours"
     "vien"
     "shilton"
     "vellanky"
     "kundu"
-    "wycoff --disable_natural_gradient"
+    "ours --disable_natural_gradient"
     "vien   --disable_natural_gradient"
-    "wycoff --sample_candidates_from_gp"
+    "ours --sample_candidates_from_gp"
     "shilton --reduced_grid"
 )
 multidim_fns="ackley|hartmann|rosenbrock|pendulum|sinc2d|sinc3d|sinc4d"

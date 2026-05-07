@@ -1,12 +1,12 @@
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import jax
 import jax.numpy as jnp
 from tqdm import tqdm
 import pickle
-
 
 def filter_and_rename_methods(
     df: pd.DataFrame, methods: dict[str, str]
@@ -38,6 +38,28 @@ def plot_ys(ax, ys: np.ndarray, style: dict):
     ax.fill_between(x, ll, ul, alpha=0.2, color=ax.lines[-1].get_color())
 
 
+def setup_log_yaxis(ax):
+    """Force consistent 10^x labels on log y-axis, even for sub-decade ranges.
+
+    Places major ticks at every decade boundary within the current ylim and
+    formats them as 10^x. Minor ticks are drawn at 2..9 within each decade
+    but left unlabeled, which prevents matplotlib from auto-labeling them as
+    2x10^x / 3x10^x when the range spans less than one decade.
+    """
+    ymin, ymax = ax.get_ylim()
+    lo = np.floor(np.log10(ymin))
+    hi = np.ceil(np.log10(ymax))
+
+    decades = np.arange(lo, hi + 1)
+    ax.yaxis.set_major_locator(mticker.FixedLocator(10.0 ** decades))
+    ax.yaxis.set_major_formatter(mticker.LogFormatterSciNotation(base=10))
+
+    ax.yaxis.set_minor_locator(
+        mticker.LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1, numticks=100)
+    )
+    ax.yaxis.set_minor_formatter(mticker.NullFormatter())
+
+
 def plot_running_best(
     df: pd.DataFrame, title: str, save_dir: str, methods: dict[str, str]
 ):
@@ -47,6 +69,7 @@ def plot_running_best(
     for target_fn in tqdm(df["target_fn"].unique()):
         df_targ = df[df["target_fn"] == target_fn]
         fig = plt.figure(figsize=(4, 4))
+        ax = plt.gca()
         for method, color in zip(df_targ["method"].unique(), plt.cm.tab10.colors):
             df_method = df_targ[(df_targ["method"] == method)]
             ys = [
@@ -54,21 +77,31 @@ def plot_running_best(
                 for i in sorted(df_method["i"].unique())
             ]
             ys = np.stack(ys, axis=1)  # shape (runs, acquisitions)
-            plot_ys(plt.gca(), ys, style={"color": color, "label": method})
+            if target_fn == "mnist":
+                ys = ys - 0.01  # offset for better readability
+ 
+            plot_ys(ax, ys, style={"color": color, "label": method})
 
-        plt.title(f"{target_fn}{title}")
-        plt.xlabel("Acquisitions")
-        # scale escluding random initial acquisitions to avoid skewing the plot
-        plt.yscale("log")
-        plt.xlim(1, df_targ["i"].max() + 1)
+        ax.set_title(f"{target_fn}{title}")
+        ax.set_xlabel("Acquisitions")
+        ax.set_yscale("log")
+        ax.set_xlim(1, df_targ["i"].max() + 1)
+
+        # Widen narrow ranges to at least one full decade so every plot gets
+        # at least one visible 10^x label and labels align across subplots.
         if target_fn == "mnist":
-            plt.ylim(2.0e-2, 2.5e-2)
+            ax.set_ylim(1.0e-2, 0.2e-1)
+        if target_fn == "pendulum":
+            ax.set_ylim(3.0e+2, 1.0e+3)
         if target_fn == "sinc3d":
-            plt.ylim(2.0e-2, 1.1e-1)
+            ax.set_ylim(1.0e-2, 1.0e-1)
         if target_fn == "sinc4d":
-            plt.ylim(2.0e-2, 1.1e-1)
-        plt.grid()
-        plt.legend(loc="upper right")  # top right
+            ax.set_ylim(1.0e-2, 1.0e-1)
+
+        setup_log_yaxis(ax)
+
+        ax.grid()
+        ax.legend(loc="upper right")
         plt.savefig(f"{save_dir}/{target_fn}.pdf", bbox_inches="tight")
         plt.close()
 
@@ -201,10 +234,10 @@ if __name__ == "__main__":
     best_combos = filter_and_rename_methods(
         best_combos,
         methods={
-            "wycoff_no_natural_grad": "ours",
-            "kundu": "kundu",
-            "vien": "vien",
-            "shilton": "shilton",
+            "ours_no_natural_grad": "Ours",
+            "kundu": "Kundu",
+            "vien": "Vien",
+            "shilton": "Shilton",
         },
     )
     with open("plots/tables/best_lengthscales.txt", "w") as f:
@@ -228,18 +261,18 @@ if __name__ == "__main__":
         title=f"",
         save_dir="plots/method_comparison",
         methods={
-            "wycoff_no_natural_grad": "ours",
-            "kundu": "kundu",
-            "vien": "vien",
-            "shilton": "shilton",
-            "vellanky": "vellanky",
+            "ours_no_natural_grad": "ours",
+            "kundu": "Kundu",
+            "vien": "Vien",
+            "shilton": "Shilton",
+            "vellanky": "Vellanki",
         },
     )
 
     ################################################################################
     # NATURAL GRADIENT ABLATIONS
     print("Plotting natural gradient ablations...")
-    for method in ["wycoff", "vien"]:
+    for method in ["ours", "vien"]:
         plot_running_best(
             df=ys_filtered,
             title=f"",
@@ -258,8 +291,8 @@ if __name__ == "__main__":
         title=f"",
         save_dir=f"plots/candidates_sampling_ablation",
         methods={
-            f"wycoff": f"Ours",
-            f"wycoff_sample_from_gp": f"Ours (sample from GP)",
+            f"ours": f"Ours",
+            f"ours_sample_from_gp": f"Ours (sample from GP)",
             f"shilton": f"Shilton",
         },
     )
@@ -275,7 +308,7 @@ if __name__ == "__main__":
         title=f"",
         save_dir=f"plots/kernel_profile_ablation",
         methods={
-            f"wycoff_no_natural_grad_{profile}": f"{profile}"
+            f"ours_no_natural_grad_{profile}": f"{profile}"
             for profile in ys_all["profile"].unique()
         },
     )
@@ -287,11 +320,12 @@ if __name__ == "__main__":
         df=summary_filtered,
         save_dir="plots/tables",
         methods={
-            "wycoff_no_natural_grad": "Ours",
+            "random": "Random",
+            "ours_no_natural_grad": "Ours",
             "kundu": "Kundu",
             "vien": "Vien",
             "shilton": "Shilton",
-            "vellanky": "Vellanky",
+            "vellanky": "Vellanki",
         },
     )
 
@@ -302,7 +336,7 @@ if __name__ == "__main__":
         df=summary_filtered,
         save_dir="plots/f_visualizations",
         methods={
-            "wycoff_no_natural_grad": "Learned Activation",
+            "ours_no_natural_grad": "Learned Activation",
             # "kundu": "kundu",
             # "vien": "vien",
             # "shilton": "shilton",
@@ -317,7 +351,7 @@ if __name__ == "__main__":
         df=summary_filtered,
         save_dir="plots/f_visualizations",
         methods={
-            "wycoff_no_natural_grad": "Learned Path",
+            "ours_no_natural_grad": "Learned Path",
             # "kundu": "kundu",
             # "vien": "vien",
             # "shilton": "shilton",
